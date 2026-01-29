@@ -1,0 +1,2338 @@
+CREATE OR REPLACE TEMP TABLE single_practice_organizations AS
+SELECT organization_id, COUNT(DISTINCT merchant_id) AS merchants 
+FROM prep.core_staging.stg_merchants 
+--WHERE account_industry_segment = 'Plastic and Cosmetic Surgery'  
+GROUP BY 1 
+HAVING merchants = 1;
+
+
+create or replace temp table risk.practice_intelligence.daily_web_review_2 as
+        select m.merchant_id 
+            , a.account_id
+            , c.name as account_name
+            , c.website_implementation_c
+            , a.id as case_id
+            , date(a.created_date) as review_date
+            , a.created_by_id
+            , b.name
+            , a.website_link_c
+            , a.ease_of_finding_payment_plan_options_c
+            , a.website_financing_url_c
+            , a.website_implementation_type_c
+            , (case when a.first_look_option_c is not null and a.first_look_option_c != 'None' then 1 else 0 end +
+               case when a.second_look_option_c is not null and a.second_look_option_c != 'None' then 1 else 0 end +
+               case when a.third_look_option_c is not null and a.third_look_option_c != 'None' then 1 else 0 end +
+               case when a.fourth_look_option_c is not null and a.fourth_look_option_c != 'None' then 1 else 0 end +
+               case when a.fifth_look_option_c is not null and a.fifth_look_option_c != 'None' then 1 else 0 end +
+               case when a.sixth_look_option_c is not null and a.sixth_look_option_c != 'None' then 1 else 0 end) as number_of_web_options
+            , case when a.first_look_option_c is not null 
+                   and a.first_look_option_c != 'None' 
+                   and a.first_look_option_c not in ('Cherry', 'CareCredit', 'Allē Pay') 
+                   then 1 else 0 end as non_CC_leader
+            , a.first_look_option_c
+            , a.second_look_option_c
+            , a.third_look_option_c
+            , a.fourth_look_option_c
+            , a.fifth_look_option_c
+            , a.sixth_look_option_c
+            , a.care_credit_slug_c
+            , a.sunbit_slug_c
+            , a.alphaeon_slug_c
+            , a.proceed_slug_c
+            , a.does_the_practice_have_memberships_liste_c
+            , a.instagram_link_c
+            , a.facebook_link_c
+            , a.is_cherry_listed_on_instagram_c
+            , a.is_cherry_listed_on_facebook_c
+            , a.are_competitors_listed_on_instagram_c
+            , a.are_competitors_listed_on_facebook_c
+            -- NEW COLUMN
+            -- EXISTING CALCULATED COLUMNS
+            , case when first_look_option_c in('Cherry','Allē Pay') then 1
+                when second_look_option_c  in('Cherry','Allē Pay') then 2
+                when third_look_option_c  in('Cherry','Allē Pay') then 3
+                when fourth_look_option_c  in('Cherry','Allē Pay') then 4
+                when fifth_look_option_c  in('Cherry','Allē Pay') then 5
+                when sixth_look_option_c  in ('Cherry','Allē Pay') then 6
+                else null end as web_position
+            , case
+                when WEBSITE_IMPLEMENTATION_TYPE_C <> 'Not Listed' then 1
+                when web_position is null then 0 else 1 end as web_presence
+            , case when first_look_option_c in ('Cherry','Allē Pay') then 1
+                when second_look_option_c in('Cherry','Allē Pay') then 1
+                when third_look_option_c in('Cherry','Allē Pay') then 1
+                else 0 end as top3_web_presence
+            , case when first_look_option_c = 'CareCredit' then 1
+                when second_look_option_c = 'CareCredit' then 1
+                when third_look_option_c = 'CareCredit' then 1
+                when fourth_look_option_c = 'CareCredit' then 1
+                when fifth_look_option_c = 'CareCredit' then 1
+                when sixth_look_option_c = 'CareCredit' then 1
+                else 0 end as carecredit_web_presence
+            , case when EASE_OF_FINDING_PAYMENT_PLAN_OPTIONS_C = 'No Financing Options Listed' and web_presence = FALSE then 0 else 1 end as has_financing_options
+            , case when web_position = 1 then 1 else 0 end as web_leader
+            , case when first_look_option_c  in('Cherry','Allē Pay') and (second_look_option_c is null or second_look_option_c = 'None') and (third_look_option_c is null or third_look_option_c = 'None') then 1 else 0 end as web_monopoly
+            , case when WEBSITE_IMPLEMENTATION_TYPE_C = 'Widget' or WEBSITE_IMPLEMENTATION_TYPE_C ilike '%Widget%' then 1 else 0 end as web_widget
+            , case when a.instagram_link_c is not null then 1
+                when a.facebook_link_c is not null then 1
+                else 0 end as has_social_media
+            , case when IS_CHERRY_LISTED_ON_INSTAGRAM_C = 'Yes' then 1
+                when IS_CHERRY_LISTED_ON_FACEBOOK_C = 'Yes' then 1
+                else 0 end as cherry_on_social_media
+            , case when ARE_COMPETITORS_LISTED_ON_INSTAGRAM_C = 'Yes' then 1
+                when ARE_COMPETITORS_LISTED_ON_INSTAGRAM_C = 'Yes' then 1
+                else 0 end as competitors_on_social_media
+            , case when cherry_on_social_media = 1 and competitors_on_social_media = 0  then 1 else 0 end as social_monopoly
+            , iff(social_monopoly = 1,15,0) + iff(web_leader = 1,50,0) + iff(web_widget = 1,15,0) + iff(web_monopoly =1,20,0)  as web_review_score_vet2
+            , iff(web_presence = 1,10,0) + iff(top3_web_presence = 1,40,0) + iff(web_leader = 1,20,0) + iff(web_widget = 1,15,0) + iff(web_monopoly =1,15,0)  as web_review_score_Other
+            , iff(social_monopoly = 1,10,0) + iff(web_leader = 1,40,0) + iff(web_widget = 1,10,0) + iff(web_monopoly =1,40,0)  as web_review_score_aesthetics
+        from raw.salesforce_fivetran.case a
+        left join prep.core_staging.stg_merchants m
+            on a.account_id = m.sf_account_id
+        left join raw.salesforce_fivetran.user b
+            on a.created_by_id = b.id
+        left join raw.salesforce_fivetran.account c
+            on a.account_id = c.id   
+        where a.record_type_id = '012Ql000000EOqTIAW'
+        and EASE_OF_FINDING_PAYMENT_PLAN_OPTIONS_C <> 'No Financing Options Listed'
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY merchant_id ORDER BY a.created_date desc) = 1;
+
+CREATE OR REPLACE TEMP TABLE Other_v4_dependent AS
+WITH RankedShops AS (
+    SELECT 
+        a.merchant_id, 
+        b.merchant_name,  
+        b.CHERRY_DB_INDUSTRY,
+        case when lower(b.merchant_name) like '%urgent%' or lower(b.merchant_name) like '%emergency%' or lower(b.merchant_name) like '%24/7%' then 'Emergency' else 'Non-Emergency' end as emergency_flag,
+        b.organization_id, 
+        b.merchant_type,
+        b.account_industry_segment, 
+        b.go_live_date, 
+        w.number_of_web_options,
+        w.non_CC_leader,
+        a.first_look_option_c as shop_first_look,
+        w.first_look_option_c as web_first_look,
+        a.SECOND_LOOK_OPTION_C as shop_second_look,
+        a.first_look_option_c,
+        a.second_look_option_c,
+        a.actual_look,
+        a.third_look_option_c,
+        a.fourth_look_option_c,
+        a.fifth_look_option_c,
+        a.sixth_look_option_c,
+        a.trust_score_c,
+        DATE(a.created_date) AS shopped_date, 
+        shopped_date- go_live_date as days_when_shop,
+        case when days_when_shop <= 60 then 'sales_eval' when days_when_shop > 60 then 'post_sales' else 'NULL' end as shop_date_ind,
+        mystery_shopping_assessment,
+        c.zipcode, 
+        COALESCE(f.percentile, f2.median_income_percentile) AS area_vantage_percentile,
+            case when a.first_look_option_c is not null and a.first_look_option_c != 'None' then 1 else 0 end +
+               case when a.second_look_option_c is not null and a.second_look_option_c != 'None' then 1 else 0 end +
+               case when a.third_look_option_c is not null and a.third_look_option_c != 'None' then 1 else 0 end +
+               case when a.fourth_look_option_c is not null and a.fourth_look_option_c != 'None' then 1 else 0 end +
+               case when a.fifth_look_option_c is not null and a.fifth_look_option_c != 'None' then 1 else 0 end +
+               case when a.sixth_look_option_c is not null and a.sixth_look_option_c != 'None' then 1 else 0 end as number_of_shop_options,
+case when 
+    FIRST_LOOK = 1 and  a.SECOND_LOOK_OPTION_C = 'None' and w.web_monopoly =1   then 0
+    when FIRST_LOOK = 1 and a.SECOND_LOOK_OPTION_C = 'None'   and w.web_leader =1   then 0
+ --    when FIRST_LOOK = 1 and STRENGTH_OF_FIRST_LOOK_C ilike '%strong%' and w.web_review_score_plastics IS NULL then 0.75
+      when (mystery_shopping_assessment = 'At-Risk' and web_leader in (0)) or (web_position in (4,5,6)) or 
+      (mystery_shopping_assessment = 'At-Risk' and web_leader is NULL)  then 2 
+        when mystery_shopping_assessment = 'Healthy: Some Concerns' and (number_of_web_options > 3 and number_of_shop_options > 3) then 2
+      when  (number_of_web_options > 3 or number_of_shop_options > 3)  and non_CC_leader = 1 then 2
+       when   A.first_look_option_c NOT IN ('Cherry','CareCredit') and non_CC_leader = 1 then 2
+              when non_CC_leader = 1 then 2
+       when shop_first_look = 'CareCredit' and w.web_leader =1  and w.web_widget = 1 then 0
+       when  web_first_look  in ('Cherry','CareCredit') and  (shop_second_look in ('None','CareCredit') and FIRST_LOOK = 1 ) then 0
+  --
+     else 1 end as V4_Numeric,
+     strength_of_first_look_c,
+            CASE 
+            WHEN mystery_shopping_assessment = 'Healthy: Optimal' THEN 0
+            WHEN mystery_shopping_assessment = 'Healthy: Some Concerns' THEN 1
+            WHEN mystery_shopping_assessment = 'At-Risk' THEN 2
+            ELSE NULL
+        END AS ms_assessment_numeric, 
+        CASE 
+            WHEN mystery_shopping_assessment IN ('Healthy: Optimal','Healthy: Some Concerns') THEN 0
+            WHEN mystery_shopping_assessment = 'At-Risk' THEN 1
+            ELSE NULL
+        END AS ms_assessment_binary,
+        CASE 
+            WHEN mystery_shopping_assessment IN ('At-Risk','Healthy: Some Concerns') THEN 0
+            WHEN mystery_shopping_assessment = 'Healthy: Optimal' THEN 1
+            ELSE NULL
+        END AS ms_assessment_binary_healthy,
+        ROW_NUMBER() OVER (PARTITION BY a.merchant_id ORDER BY a.created_date DESC) AS rn
+    FROM risk.practice_intelligence.mystery_shopping_historical a
+    LEFT JOIN prep.core_staging.stg_merchants b ON a.merchant_id = b.merchant_id
+    LEFT JOIN risk.practice_intelligence.cherry_practices c ON a.merchant_id = c.merchant_id
+    LEFT JOIN risk.practice_intelligence.median_vantage_zipcode f ON c.zipcode = f.zipcode
+    LEFT JOIN risk.practice_intelligence.median_income_zipcode f2 ON c.zipcode = f2.zipcode
+    LEFT JOIN risk.practice_intelligence.daily_web_review_2 w ON w.merchant_id = b.merchant_id
+  WHERE 
+--  b.CHERRY_DB_INDUSTRY in('Veterinary','Veterinary Hospital')
+--  and    w.web_review_score_plastics IS NULL
+--and number_of_web_options > 3
+  b.account_industry_segment = 'Other' 
+  --  AND a.first_look_option_c != 'None'
+    AND b.merchant_type = 'Cherry'
+       --    AND a.organization_id  IN (SELECT DISTINCT organization_id FROM single_practice_organizations)
+
+    --AND a.organization_id NOT IN (SELECT DISTINCT organization_id FROM risk.practice_risk.terminations)
+    AND (b.organization_group_id != 7 OR b.organization_group_id IS NULL)
+    AND DATE(a.created_date) >= '2024-02-01' 
+    AND DATE(a.created_date) < '2026-01-05'
+)
+SELECT 
+    merchant_id, 
+    merchant_name,  
+    organization_id, 
+    merchant_type,
+    account_industry_segment, 
+    CHERRY_DB_INDUSTRY,
+    go_live_date, 
+    actual_look,
+    shopped_date, 
+    shop_date_ind,
+    trust_score_c,
+    mystery_shopping_assessment,
+    zipcode,
+    EMERGENCY_FLAG,
+    strength_of_first_look_c,
+    area_vantage_percentile,
+    V4_Numeric,
+    number_of_web_options,
+    number_of_shop_options,
+    non_CC_leader,
+    ms_assessment_numeric,
+    ms_assessment_binary,
+    ms_assessment_binary_healthy,
+    first_look_option_c,
+    second_look_option_c,
+    third_look_option_c,
+    fourth_look_option_c,
+    fifth_look_option_c,
+    sixth_look_option_c,
+FROM RankedShops
+WHERE rn = 1;
+
+
+
+CREATE OR REPLACE TEMP TABLE Other_v4_dependent_menu_organization_at_shop AS
+SELECT 
+    CASE 
+            WHEN aud.MENU_CODE ILIKE '%50k%' THEN '50k' 
+            WHEN aud.MENU_CODE ILIKE '%first%' THEN 'First_look' 
+            WHEN aud.MENU_CODE ILIKE '%low%' THEN 'low_health' 
+            ELSE NULL 
+        END AS MENU_CODE,
+    aud.id,
+    d.shopped_date,
+    aud.updated_at
+FROM Other_v4_dependent d
+LEFT JOIN RAW.MARIADB_FIVETRAN_ORGANIZATION_SERVICE_MASTER.ORGANIZATION_aud aud
+    ON d.organization_id = aud.id
+WHERE aud.updated_at < d.shopped_date
+QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY d.organization_id, d.shopped_date  -- Group by the dependent request
+    ORDER BY aud.updated_at DESC                    -- Sort to find the latest specific audit row
+) = 1;
+
+
+
+
+
+CREATE OR REPLACE TEMP TABLE Other_v4_active_rate AS
+SELECT 
+    m.merchant_id, 
+    COUNT(DISTINCT a.application_id) AS total_applications,
+    COUNT(DISTINCT CASE WHEN soc.APPLICATION_SERVICE_UTM_MEDIUM ILIKE '%qr%' THEN a.application_id END) AS qr_applications,
+    COUNT(DISTINCT CASE WHEN soc.source_category = 'social media' THEN a.application_id END) AS actions_applications,
+    (COUNT(DISTINCT CASE WHEN soc.APPLICATION_SERVICE_UTM_MEDIUM ILIKE '%qr%'  THEN a.application_id END) * 100.0 / NULLIF(COUNT(DISTINCT a.application_id), 0)) AS percent_qr,
+      (COUNT(DISTINCT CASE WHEN soc.APPLICATION_SERVICE_UTM_MEDIUM ILIKE '%estimate%' THEN a.application_id END) * 100.0 / NULLIF(COUNT(DISTINCT a.application_id), 0)) AS percent_estimate,
+        (COUNT(DISTINCT CASE WHEN  APPLICATION_SERVICE_UTM_MEDIUM in ('website')  THEN a.application_id END) * 100.0 / NULLIF(COUNT(DISTINCT a.application_id), 0)) AS percent_test,
+         (COUNT(DISTINCT CASE WHEN  soc.SOURCE_CATEGORY in ('dashboard text')  THEN a.application_id END) * 100.0 / NULLIF(COUNT(DISTINCT a.application_id), 0)) AS percent_dashboard,
+          (COUNT(DISTINCT CASE WHEN  APPLICATION_SERVICE_UTM_MEDIUM in ('social_media')  THEN a.application_id END) * 100.0 / NULLIF(COUNT(DISTINCT a.application_id), 0)) AS percent_test3,
+    (COUNT(DISTINCT CASE WHEN soc.APPLICATION_SERVICE_UTM_MEDIUM ILIKE '%qr%' OR soc.APPLICATION_SERVICE_UTM_MEDIUM ILIKE '%estimate%'  THEN a.application_id END) * 100.0 / NULLIF(COUNT(DISTINCT a.application_id), 0)) AS percent_actions
+FROM Other_v4_dependent m
+LEFT JOIN (
+    SELECT * 
+    FROM prep.data_staging.int_applications_collapsed
+    WHERE is_demo = FALSE AND ORGANIZATION_ID != '17450'
+    AND application_status <> 'PREAPPROVED' 
+    AND application_status <> 'FROZEN'
+    AND source_type IN ('active','passive')
+) a ON m.merchant_id = a.merchant_id
+AND m.shopped_date BETWEEN DATE(a.created_at_pt) - 85 AND DATE(a.created_at_pt) + 5
+LEFT JOIN (
+    SELECT DISTINCT application_id, source_type, source_category, APPLICATION_SERVICE_UTM_MEDIUM
+    FROM PREP.REVENUE_ANALYTICS_STAGING.APPLICATION_ATTRIBUTION
+) soc ON a.application_id = soc.application_id
+GROUP BY 
+    m.merchant_id
+HAVING 
+    COUNT(DISTINCT CASE WHEN soc.source_type IN ('active','passive') THEN a.application_id END) > 3;
+
+
+
+
+
+
+
+
+CREATE OR REPLACE TEMP TABLE Other_v4_application_zip AS
+WITH applicant_data AS (
+    SELECT 
+        m.merchant_id, 
+        m.mystery_shopping_assessment, 
+        m.shopped_date,
+        application_id,
+        COALESCE(percentile, median_income_percentile) AS applicant_vantage_percentile
+    FROM 
+        Other_v4_dependent m
+    LEFT JOIN (
+        SELECT 
+            a.merchant_id, 
+            DATE(stg_a.created_at_pt) AS created_date, 
+            stg_a.application_id,
+            add.zip, 
+            v.percentile, 
+            f2.median_income_percentile
+        FROM 
+            RAW.MARIADB_FIVETRAN_APPLICATION_SERVICE_MASTER.application a
+        LEFT JOIN 
+            risk.risk_tables.risk_application r ON a.id = r.id
+        LEFT JOIN 
+            prep.data_staging.int_applications_collapsed stg_a ON a.id = stg_a.application_id
+        LEFT JOIN 
+            RAW.MARIADB_FIVETRAN_BORROWER_SERVICE_MASTER.BORROWER b ON a.borrower_id = b.ID
+        LEFT JOIN 
+            RAW.MARIADB_FIVETRAN_BORROWER_SERVICE_MASTER.borrower_address add ON b.address_id = add.id
+        LEFT JOIN 
+            risk.practice_intelligence.median_vantage_zipcode v ON add.zip = v.zipcode
+        LEFT JOIN 
+            risk.practice_intelligence.median_income_zipcode f2 ON add.zip = f2.zipcode
+        WHERE 
+            stg_a.ORGANIZATION_ID != 17450
+    ) a 
+    ON m.merchant_id = a.merchant_id
+    AND a.created_date BETWEEN DATEADD(day, -55, m.shopped_date) 
+        AND DATEADD(day, 5, m.shopped_date)
+)
+SELECT 
+    merchant_id, 
+    MAX(mystery_shopping_assessment) AS mystery_shopping_assessment, 
+    MAX(shopped_date) AS shopped_date, 
+    COUNT(DISTINCT application_id) AS applications, 
+    MEDIAN(applicant_vantage_percentile) AS applicant_vantage_percentile
+FROM 
+    applicant_data
+GROUP BY 
+    merchant_id
+HAVING 
+    COUNT(DISTINCT application_id) >= 3;
+
+
+
+
+CREATE OR REPLACE TEMP TABLE Other_practices_web_review AS
+SELECT m.merchant_id, a.account_id, c.name AS account_name, a.id AS case_id, DATE(a.created_date) AS review_date,
+    a.created_by_id, b.name, a.website_link_c, a.ease_of_finding_payment_plan_options_c, a.website_financing_url_c,
+    a.website_implementation_type_c, a.first_look_option_c, a.second_look_option_c, a.third_look_option_c,
+    a.fourth_look_option_c, a.fifth_look_option_c, a.sixth_look_option_c, a.care_credit_slug_c, a.sunbit_slug_c,
+    a.alphaeon_slug_c, a.proceed_slug_c, a.does_the_practice_have_memberships_liste_c, a.instagram_link_c,
+    a.facebook_link_c, a.is_cherry_listed_on_instagram_c, a.is_cherry_listed_on_facebook_c,
+    a.are_competitors_listed_on_instagram_c, a.are_competitors_listed_on_facebook_c,
+    CASE 
+        WHEN first_look_option_c not in('None','null')
+        and second_look_option_c not in('None','null')
+        and third_look_option_c not in('None','null')
+        then 0 else 1
+    END AS high_competition,
+     CASE 
+        WHEN first_look_option_c = 'Cherry' THEN 1
+        WHEN second_look_option_c = 'Cherry' THEN 2
+        WHEN third_look_option_c = 'Cherry' THEN 3
+        WHEN fourth_look_option_c = 'Cherry' THEN 4
+        WHEN fifth_look_option_c = 'Cherry' THEN 5
+        WHEN sixth_look_option_c = 'Cherry' THEN 6
+        ELSE NULL
+    END AS web_position,
+    CASE
+        WHEN WEBSITE_IMPLEMENTATION_TYPE_C <> 'Not Listed' THEN 1
+        WHEN web_position IS NULL THEN 0
+        ELSE 1
+    END AS web_presence,
+    CASE 
+        WHEN first_look_option_c = 'Cherry' THEN 1
+        WHEN second_look_option_c = 'Cherry' THEN 1
+      --  WHEN third_look_option_c = 'Cherry' THEN 1
+        ELSE 0
+    END AS top2_web_presence,
+       CASE 
+        WHEN first_look_option_c = 'Cherry' THEN 1
+        WHEN second_look_option_c = 'Cherry' THEN 1
+        and first_look_option_c = 'CareCredit'
+        ELSE 0
+    END AS top2_with_Care_Credit,
+       case when first_look_option_c  in ('Cherry','Allē Pay','CareCredit') then 1
+        else 0 end as first_look_not_CC_alt,
+
+    
+    CASE 
+        WHEN first_look_option_c = 'CareCredit' THEN 1
+        WHEN second_look_option_c = 'CareCredit' THEN 1
+        WHEN third_look_option_c = 'CareCredit' THEN 1
+        WHEN fourth_look_option_c = 'CareCredit' THEN 1
+        WHEN fifth_look_option_c = 'CareCredit' THEN 1
+        WHEN sixth_look_option_c = 'CareCredit' THEN 1
+        ELSE 0
+    END AS carecredit_web_presence,
+    CASE 
+        WHEN EASE_OF_FINDING_PAYMENT_PLAN_OPTIONS_C = 'No Financing Options Listed' AND web_presence = FALSE THEN 0
+        ELSE 1
+    END AS has_financing_options,
+    CASE 
+        WHEN web_position = 1 THEN 1
+        ELSE 0
+    END AS web_leader,
+    CASE 
+        WHEN first_look_option_c = 'Cherry' AND (second_look_option_c IS NULL OR second_look_option_c = 'None') 
+             AND (third_look_option_c IS NULL OR third_look_option_c = 'None') THEN 1
+        ELSE 0
+    END AS web_monopoly
+ , case when WEBSITE_IMPLEMENTATION_TYPE_C = 'Widget' or WEBSITE_IMPLEMENTATION_TYPE_C ilike '%Widget%' then 1 else 0 end as web_widget,
+    CASE 
+        WHEN a.instagram_link_c IS NOT NULL THEN 1
+        WHEN a.facebook_link_c IS NOT NULL THEN 1
+        ELSE 0
+    END AS has_social_media,
+    CASE 
+        WHEN IS_CHERRY_LISTED_ON_INSTAGRAM_C = 'Yes' THEN 1
+        WHEN IS_CHERRY_LISTED_ON_FACEBOOK_C = 'Yes' THEN 1
+        ELSE 0
+    END AS cherry_on_social_media,
+    CASE 
+        WHEN ARE_COMPETITORS_LISTED_ON_INSTAGRAM_C = 'Yes' THEN 1
+        WHEN ARE_COMPETITORS_LISTED_ON_INSTAGRAM_C = 'Yes' THEN 1
+        ELSE 0
+    END AS competitors_on_social_media,
+    CASE 
+        WHEN cherry_on_social_media = 1 AND competitors_on_social_media = 0 THEN 1
+        ELSE 0
+    END AS social_monopoly,
+    
+    (CASE WHEN first_look_option_c IS NOT NULL AND first_look_option_c != 'None' THEN 1 ELSE 0 END +
+     CASE WHEN second_look_option_c IS NOT NULL AND second_look_option_c != 'None' THEN 1 ELSE 0 END +
+     CASE WHEN third_look_option_c IS NOT NULL AND third_look_option_c != 'None' THEN 1 ELSE 0 END +
+     CASE WHEN fourth_look_option_c IS NOT NULL AND fourth_look_option_c != 'None' THEN 1 ELSE 0 END +
+     CASE WHEN fifth_look_option_c IS NOT NULL AND fifth_look_option_c != 'None' THEN 1 ELSE 0 END +
+     CASE WHEN sixth_look_option_c IS NOT NULL AND sixth_look_option_c != 'None' THEN 1 ELSE 0 END) AS web_options,
+     case when web_options < 2 then 1 else 0 end as web_options_less_than_3,
+      iff (web_leader = 1,40,0) + iff(web_widget = 1,20,0) + iff(web_monopoly =1,30,0) + iff(web_presence =1,10,0)  AS web_review_score2,
+      iff (web_leader = 1,30,0) + iff(web_widget = 1,10,0) + iff(web_monopoly =1,50,0) + iff(social_monopoly = 1,10,0)
+      AS web_review_score,
+      iff (web_leader = 1,40,0) + iff(web_widget = 1,20,0) + iff(web_monopoly =1,30,0) + iff(social_monopoly =1,10,0 )  AS web_review_score3,
+FROM raw.salesforce_fivetran.case a
+LEFT JOIN prep.core_staging.stg_merchants m ON a.account_id = m.sf_account_id
+LEFT JOIN raw.salesforce_fivetran.user b ON a.created_by_id = b.id
+LEFT JOIN raw.salesforce_fivetran.account c ON a.account_id = c.id   
+WHERE a.record_type_id = '012Ql000000EOqTIAW' 
+--AND m.account_industry_segment = 'Plastic and Cosmetic Surgery' 
+AND EASE_OF_FINDING_PAYMENT_PLAN_OPTIONS_C <> 'No Financing Options Listed'
+QUALIFY ROW_NUMBER() OVER (PARTITION BY m.merchant_id ORDER BY a.created_date DESC) = 1;
+
+
+
+
+CREATE OR REPLACE TEMP TABLE Other_v4_web_review_score AS
+SELECT a.*, EASE_OF_FINDING_PAYMENT_PLAN_OPTIONS_C, b.review_date, web_position, web_presence, web_monopoly, web_leader, web_widget, social_monopoly,  carecredit_web_presence, b.first_look_option_c as first_look_web, b.second_look_option_c as second_look_web, b.third_look_option_c as third_look_web, web_review_score, web_review_score2,top2_web_presence,high_competition,does_the_practice_have_memberships_liste_c,web_options,web_options_less_than_3,
+web_review_score3
+FROM Other_v4_dependent a
+LEFT JOIN Other_practices_web_review b ON a.merchant_id = b.merchant_id
+-- AND a.shopped_date BETWEEN b.review_date - 60 AND b.review_date + 60
+WHERE b.merchant_id IS NOT NULL;
+
+
+
+
+
+--SELECT * FROM exclusions;
+/* Applications */ 
+CREATE OR REPLACE TEMP TABLE Other_v4_applications_60d AS
+WITH applications AS (
+    SELECT m.merchant_id, m.mystery_shopping_assessment, m.shopped_date, a.application_id, a.created_date, application_status
+    FROM Other_v4_dependent m
+    LEFT JOIN (
+        SELECT DISTINCT a.application_id AS application_id, a.merchant_id, a.organization_id, application_status, DATE(MIN(a.created_at_pt)) AS created_date
+        FROM prep.data_staging.int_applications_collapsed a
+        WHERE is_demo = FALSE AND application_status <> 'PREAPPROVED'  AND a.ORGANIZATION_ID != '17450'
+        GROUP BY 1, 2, 3, 4
+    ) a ON m.merchant_id = a.merchant_id
+    AND m.shopped_date BETWEEN a.created_date - 55 AND a.created_date + 5
+)
+SELECT merchant_id, mystery_shopping_assessment, ZEROIFNULL(COUNT(DISTINCT application_id)) AS applications
+FROM applications
+GROUP BY 1, 2;
+
+CREATE OR REPLACE TEMP TABLE Other_v4_loan_stacking_flag AS
+WITH applications AS (
+    SELECT 
+        m.merchant_id, 
+        m.mystery_shopping_assessment, 
+        m.shopped_date, 
+        a.application_id, 
+        a.created_date, 
+        a.application_status, 
+        CASE 
+            WHEN alt_opened_90_days_aftr_cherry_1st_loan = 1 THEN 1 
+            WHEN alt_opened_90_days_bfr_cherry_1st_loan = 1 THEN 1 
+            WHEN ccr_opened_90_days_bfr_cherry_1st_loan = 1 THEN 1  
+            WHEN ccr_opened_90_days_aftr_cherry_1st_loan = 1 THEN 1 
+            ELSE 0 
+        END AS loanstack_flag
+    FROM Other_v4_dependent m
+    LEFT JOIN (
+        SELECT DISTINCT 
+            a.application_id, 
+            a.merchant_id, 
+            a.organization_id, 
+            application_status, 
+            DATE(MIN(a.created_at_pt)) AS created_date,
+            alt_opened_90_days_aftr_cherry_1st_loan, 
+            alt_opened_90_days_bfr_cherry_1st_loan, 
+            ccr_opened_90_days_bfr_cherry_1st_loan, 
+            ccr_opened_90_days_aftr_cherry_1st_loan
+        FROM prep.data_staging.int_applications_collapsed a
+        LEFT JOIN RISK.RISK_TABLES.TP_TU_CUST_MGMT_V2_1 tu ON tu.cherry_application_id = a.application_id
+        WHERE is_demo = FALSE 
+            AND application_status <> 'PREAPPROVED'  
+            AND a.ORGANIZATION_ID != '17450'
+            AND tu.cherry_application_id > 0
+        GROUP BY 1, 2, 3, 4, 6, 7, 8, 9
+    ) a ON m.merchant_id = a.merchant_id
+        AND m.shopped_date BETWEEN a.created_date - 800 AND a.created_date + 200
+)
+SELECT 
+    merchant_id, 
+    mystery_shopping_assessment, 
+    ZEROIFNULL(COUNT(DISTINCT application_id)) AS applications,
+    ZEROIFNULL(COUNT(DISTINCT CASE WHEN loanstack_flag = 1 THEN application_id END)) AS loanstack_applications,
+    ZEROIFNULL(DIV0(COUNT(DISTINCT CASE WHEN loanstack_flag = 1 THEN application_id END), 
+                    COUNT(DISTINCT application_id))) * 100 AS loanstack_pct
+FROM applications
+GROUP BY 1, 2;
+
+
+
+
+
+
+CREATE OR REPLACE TEMP TABLE application_volume_bimonthly AS
+WITH applications AS (
+    SELECT 
+        a.application_id,
+        a.merchant_id,
+        a.organization_id,
+        a.application_status,
+        DATE(a.created_at_pt) AS created_date
+    FROM prep.data_staging.int_applications_collapsed a
+    WHERE a.is_demo = FALSE 
+      AND a.application_status <> 'PREAPPROVED'  
+      AND a.ORGANIZATION_ID != '17450'
+      AND DATE(a.created_at_pt) >= '2022-01-01'
+),
+
+bimonthly_periods AS (
+    SELECT 
+        merchant_id,
+        application_id,
+        created_date,
+        CASE 
+            WHEN YEAR(created_date) = 2022 AND MONTH(created_date) IN (1,2) THEN '2022-Jan-Feb'
+            WHEN YEAR(created_date) = 2022 AND MONTH(created_date) IN (3,4) THEN '2022-Mar-Apr'
+            WHEN YEAR(created_date) = 2022 AND MONTH(created_date) IN (5,6) THEN '2022-May-Jun'
+            WHEN YEAR(created_date) = 2022 AND MONTH(created_date) IN (7,8) THEN '2022-Jul-Aug'
+            WHEN YEAR(created_date) = 2022 AND MONTH(created_date) IN (9,10) THEN '2022-Sep-Oct'
+            WHEN YEAR(created_date) = 2022 AND MONTH(created_date) IN (11,12) THEN '2022-Nov-Dec'
+            WHEN YEAR(created_date) = 2023 AND MONTH(created_date) IN (1,2) THEN '2023-Jan-Feb'
+            WHEN YEAR(created_date) = 2023 AND MONTH(created_date) IN (3,4) THEN '2023-Mar-Apr'
+            WHEN YEAR(created_date) = 2023 AND MONTH(created_date) IN (5,6) THEN '2023-May-Jun'
+            WHEN YEAR(created_date) = 2023 AND MONTH(created_date) IN (7,8) THEN '2023-Jul-Aug'
+            WHEN YEAR(created_date) = 2023 AND MONTH(created_date) IN (9,10) THEN '2023-Sep-Oct'
+            WHEN YEAR(created_date) = 2023 AND MONTH(created_date) IN (11,12) THEN '2023-Nov-Dec'
+            WHEN YEAR(created_date) = 2024 AND MONTH(created_date) IN (1,2) THEN '2024-Jan-Feb'
+            WHEN YEAR(created_date) = 2024 AND MONTH(created_date) IN (3,4) THEN '2024-Mar-Apr'
+            WHEN YEAR(created_date) = 2024 AND MONTH(created_date) IN (5,6) THEN '2024-May-Jun'
+            WHEN YEAR(created_date) = 2024 AND MONTH(created_date) IN (7,8) THEN '2024-Jul-Aug'
+            WHEN YEAR(created_date) = 2024 AND MONTH(created_date) IN (9,10) THEN '2024-Sep-Oct'
+            WHEN YEAR(created_date) = 2024 AND MONTH(created_date) IN (11,12) THEN '2024-Nov-Dec'
+            WHEN YEAR(created_date) = 2025 AND MONTH(created_date) IN (1,2) THEN '2025-Jan-Feb'
+            WHEN YEAR(created_date) = 2025 AND MONTH(created_date) IN (3,4) THEN '2025-Mar-Apr'
+            WHEN YEAR(created_date) = 2025 AND MONTH(created_date) IN (5,6) THEN '2025-May-Jun'
+            WHEN YEAR(created_date) = 2025 AND MONTH(created_date) IN (7,8) THEN '2025-Jul-Aug'
+            WHEN YEAR(created_date) = 2025 AND MONTH(created_date) IN (9,10) THEN '2025-Sep-Oct'
+            WHEN YEAR(created_date) = 2025 AND MONTH(created_date) IN (11,12) THEN '2025-Nov-Dec'
+            ELSE 'Other'
+        END AS bimonthly_period,
+        -- Create a sortable period key for ordering
+        CASE 
+            WHEN YEAR(created_date) = 2022 AND MONTH(created_date) IN (1,2) THEN 202201
+            WHEN YEAR(created_date) = 2022 AND MONTH(created_date) IN (3,4) THEN 202203
+            WHEN YEAR(created_date) = 2022 AND MONTH(created_date) IN (5,6) THEN 202205
+            WHEN YEAR(created_date) = 2022 AND MONTH(created_date) IN (7,8) THEN 202207
+            WHEN YEAR(created_date) = 2022 AND MONTH(created_date) IN (9,10) THEN 202209
+            WHEN YEAR(created_date) = 2022 AND MONTH(created_date) IN (11,12) THEN 202211
+            WHEN YEAR(created_date) = 2023 AND MONTH(created_date) IN (1,2) THEN 202301
+            WHEN YEAR(created_date) = 2023 AND MONTH(created_date) IN (3,4) THEN 202303
+            WHEN YEAR(created_date) = 2023 AND MONTH(created_date) IN (5,6) THEN 202305
+            WHEN YEAR(created_date) = 2023 AND MONTH(created_date) IN (7,8) THEN 202307
+            WHEN YEAR(created_date) = 2023 AND MONTH(created_date) IN (9,10) THEN 202309
+            WHEN YEAR(created_date) = 2023 AND MONTH(created_date) IN (11,12) THEN 202311
+            WHEN YEAR(created_date) = 2024 AND MONTH(created_date) IN (1,2) THEN 202401
+            WHEN YEAR(created_date) = 2024 AND MONTH(created_date) IN (3,4) THEN 202403
+            WHEN YEAR(created_date) = 2024 AND MONTH(created_date) IN (5,6) THEN 202405
+            WHEN YEAR(created_date) = 2024 AND MONTH(created_date) IN (7,8) THEN 202407
+            WHEN YEAR(created_date) = 2024 AND MONTH(created_date) IN (9,10) THEN 202409
+            WHEN YEAR(created_date) = 2024 AND MONTH(created_date) IN (11,12) THEN 202411
+            WHEN YEAR(created_date) = 2025 AND MONTH(created_date) IN (1,2) THEN 202501
+            WHEN YEAR(created_date) = 2025 AND MONTH(created_date) IN (3,4) THEN 202503
+            WHEN YEAR(created_date) = 2025 AND MONTH(created_date) IN (5,6) THEN 202505
+            WHEN YEAR(created_date) = 2025 AND MONTH(created_date) IN (7,8) THEN 202507
+            WHEN YEAR(created_date) = 2025 AND MONTH(created_date) IN (9,10) THEN 202509
+            WHEN YEAR(created_date) = 2025 AND MONTH(created_date) IN (11,12) THEN 202511
+            ELSE 999999
+        END AS period_sort_key
+    FROM applications
+)
+
+SELECT 
+    merchant_id,
+    bimonthly_period,
+    period_sort_key,
+    ZEROIFNULL(COUNT(DISTINCT application_id)) AS applications
+FROM bimonthly_periods
+WHERE bimonthly_period != 'Other'
+GROUP BY merchant_id, bimonthly_period, period_sort_key
+ORDER BY merchant_id, period_sort_key;
+
+
+CREATE OR REPLACE TEMP TABLE apps_vs_historical_feature AS
+SELECT 
+    a.merchant_id, 
+    a.mystery_shopping_assessment,
+    a.applications AS applications_60d,
+    MAX(bi.applications) AS max_historical_bimonthly_apps,
+    CASE 
+        WHEN MAX(bi.applications) > 0 
+        THEN LEAST(1.0, a.applications / MAX(bi.applications)) 
+        ELSE NULL 
+    END AS apps_vs_historical
+FROM Other_v4_applications_60d a
+LEFT JOIN application_volume_bimonthly bi ON a.merchant_id = bi.merchant_id
+GROUP BY a.merchant_id, a.mystery_shopping_assessment, a.applications;
+
+
+
+
+/* Median Vantage Score */ 
+----new median vantage
+CREATE OR REPLACE TEMP TABLE Other_v4_median_vantage_60d AS
+WITH applications AS (
+    SELECT 
+        m.merchant_id, 
+        m.mystery_shopping_assessment, 
+        m.shopped_date, 
+        a.application_id, 
+        a.created_date, 
+        a.vantage4score,
+        a.risk_score
+    FROM Other_v4_dependent m
+    LEFT JOIN (
+        SELECT DISTINCT 
+            a.application_id AS application_id, 
+            a.merchant_id, 
+            a.organization_id, 
+            MAX(b.vantage4score) AS vantage4score, 
+            max(b.risk_score) as risk_score,
+            DATE(MIN(a.created_at_pt)) AS created_date
+        FROM prep.data_staging.int_applications_collapsed a
+        LEFT JOIN risk.risk_tables.risk_application b ON a.application_id = b.id
+        WHERE b.vantage4score IS NOT NULL AND b.vantage4score > 4 AND a.ORGANIZATION_ID != '17450'
+        GROUP BY 1, 2, 3
+    ) a ON m.merchant_id = a.merchant_id
+    AND m.shopped_date BETWEEN a.created_date - 55 AND a.created_date + 5
+    WHERE a.merchant_id IS NOT NULL
+)
+, applications_with_score AS (
+    SELECT 
+        merchant_id, 
+        mystery_shopping_assessment, 
+        COUNT(DISTINCT application_id) AS applications, 
+        MEDIAN(vantage4score) AS median_vantage_score_60d,
+        median(risk_score) as median_risk_score,
+        CASE 
+            WHEN COUNT(DISTINCT CASE WHEN vantage4score IS NOT NULL THEN application_id END) > 0 
+            THEN ROUND(
+                COUNT(DISTINCT CASE WHEN vantage4score < 600 AND vantage4score IS NOT NULL THEN application_id END) * 100.0 /
+                COUNT(DISTINCT CASE WHEN vantage4score IS NOT NULL THEN application_id END), 
+                2
+            )
+            ELSE NULL 
+        END AS pct_apps_below_600_60d,
+        COUNT(DISTINCT CASE WHEN vantage4score > 670 THEN application_id END) * 100.0 / COUNT(DISTINCT application_id) AS percent_over_670,
+        COUNT(DISTINCT CASE WHEN vantage4score > 720 THEN application_id END) * 100.0 / COUNT(DISTINCT application_id) AS percent_over_720,
+        COUNT(DISTINCT CASE WHEN vantage4score > 680 THEN application_id END) * 100.0 / COUNT(DISTINCT application_id) AS percent_over_680,
+        COUNT(DISTINCT CASE WHEN vantage4score < 600 THEN application_id END) * 100.0 / COUNT(DISTINCT application_id) AS percent_under_600,
+        COUNT(DISTINCT CASE WHEN vantage4score < 580 THEN application_id END) * 100.0 / COUNT(DISTINCT application_id) AS percent_under_580,
+        COUNT(DISTINCT CASE WHEN vantage4score < 570 THEN application_id END) * 100.0 / COUNT(DISTINCT application_id) AS percent_under_570
+    FROM applications
+    GROUP BY 1, 2
+)
+SELECT 
+    *,
+    ROUND(PERCENT_RANK() OVER (ORDER BY median_vantage_score_60d) * 100, 0) AS vantage_score_percentile
+FROM applications_with_score
+WHERE applications >= 3
+  AND median_vantage_score_60d IS NOT NULL;
+
+
+CREATE OR REPLACE TEMP TABLE Other_v4_median_vantage_365d AS
+WITH applications AS (
+    SELECT 
+        m.merchant_id, 
+        m.mystery_shopping_assessment, 
+        m.shopped_date, 
+        a.application_id, 
+        a.created_date, 
+        a.vantage4score
+    FROM Other_v4_dependent m
+    LEFT JOIN (
+        SELECT DISTINCT 
+            a.application_id AS application_id, 
+            a.merchant_id, 
+            a.organization_id, 
+            MAX(b.vantage4score) AS vantage4score, 
+            DATE(MIN(a.created_at_pt)) AS created_date
+        FROM prep.data_staging.int_applications_collapsed a
+        LEFT JOIN risk.risk_tables.risk_application b ON a.application_id = b.id
+        WHERE b.vantage4score IS NOT NULL AND b.vantage4score > 4 AND a.ORGANIZATION_ID != '17450'
+        GROUP BY 1, 2, 3
+    ) a ON m.merchant_id = a.merchant_id
+    AND m.shopped_date BETWEEN a.created_date - 360 AND a.created_date + 55
+    WHERE a.merchant_id IS NOT NULL
+)
+, applications_with_score AS (
+    SELECT 
+        merchant_id, 
+        mystery_shopping_assessment, 
+        COUNT(DISTINCT application_id) AS applications, 
+        MEDIAN(vantage4score) AS median_vantage_score_60d,
+        CASE 
+            WHEN COUNT(DISTINCT CASE WHEN vantage4score IS NOT NULL THEN application_id END) > 0 
+            THEN ROUND(
+                COUNT(DISTINCT CASE WHEN vantage4score < 600 AND vantage4score IS NOT NULL THEN application_id END) * 100.0 / 
+                COUNT(DISTINCT CASE WHEN vantage4score IS NOT NULL THEN application_id END), 
+                2
+            )
+            ELSE NULL 
+        END AS pct_apps_below_600_365d,
+        COUNT(DISTINCT CASE WHEN vantage4score > 670 THEN application_id END) * 100.0 / COUNT(DISTINCT application_id) AS percent_over_670,
+        COUNT(DISTINCT CASE WHEN vantage4score > 720 THEN application_id END) * 100.0 / COUNT(DISTINCT application_id) AS percent_over_720,
+        COUNT(DISTINCT CASE WHEN vantage4score > 680 THEN application_id END) * 100.0 / COUNT(DISTINCT application_id) AS percent_over_680,
+        COUNT(DISTINCT CASE WHEN vantage4score < 600 THEN application_id END) * 100.0 / COUNT(DISTINCT application_id) AS percent_under_600,
+        COUNT(DISTINCT CASE WHEN vantage4score < 580 THEN application_id END) * 100.0 / COUNT(DISTINCT application_id) AS percent_under_580,
+        COUNT(DISTINCT CASE WHEN vantage4score < 570 THEN application_id END) * 100.0 / COUNT(DISTINCT application_id) AS percent_under_570
+    FROM applications
+    GROUP BY 1, 2
+)
+SELECT *
+FROM applications_with_score
+WHERE applications >= 3;
+
+
+CREATE OR REPLACE TEMP TABLE Other_v4_prime_vantage_change AS
+select b.merchant_id, (PCT_APPS_BELOW_600_365D - PCT_APPS_BELOW_600_60D) as increase_in_sp,
+from Other_v4_median_vantage_60d a
+left join Other_v4_median_vantage_365d b on a.merchant_id = b.merchant_id
+WHERE b.applications >= 50 and a.applications > 10;
+
+
+/* Application Win Rate */
+
+
+CREATE OR REPLACE TEMP TABLE Other_v4_application_win_30 AS
+SELECT DISTINCT m.merchant_id, m.mystery_shopping_assessment, COUNT(DISTINCT a.application_id) AS application_starts, 
+    COUNT(DISTINCT CASE WHEN fl.loan_status IN ('FUNDED', 'AWAITING_FUNDING') THEN fl.application_id END) AS application_wins, 
+    ZEROIFNULL(application_wins) / NULLIFZERO(application_starts) AS application_win_rate_30
+FROM Other_v4_dependent m
+LEFT JOIN (SELECT * FROM prep.data_staging.int_applications_collapsed WHERE is_demo = FALSE AND application_status <> 'PREAPPROVED' AND ORGANIZATION_ID != '17450' AND application_status <> 'FROZEN' and application_status <> 'UNLICENSED' ) a
+    ON m.merchant_id = a.merchant_id
+    AND m.shopped_date BETWEEN DATE(a.created_at_pt) - 55 AND DATE(a.created_at_pt) + 5 --5 and 55--
+LEFT JOIN (SELECT DISTINCT application_id, loan_status, FUNDED_AT_PT FROM prep.data_staging.int_funded_information_pt) fl
+    ON a.application_id = fl.application_id
+    AND DATE(a.created_at_pt) >= DATE(fl.funded_at_pt) - 30
+GROUP BY 1, 2 
+HAVING application_starts > 3;
+
+
+
+CREATE OR REPLACE TEMP TABLE Other_v4_application_win_14 AS
+SELECT DISTINCT 
+    m.merchant_id, 
+    m.mystery_shopping_assessment, 
+    COUNT(DISTINCT CASE WHEN a.source_type NOT IN ('social media', 'practice website') THEN a.application_id END) AS application_starts, 
+    COUNT(DISTINCT CASE WHEN fl.loan_status IN ('FUNDED', 'AWAITING_FUNDING') 
+                      --  AND a.source_type NOT IN ('social media', 'practice website') 
+                        THEN fl.application_id END) AS application_wins, 
+    ZEROIFNULL(COUNT(DISTINCT CASE WHEN fl.loan_status IN ('FUNDED', 'AWAITING_FUNDING') 
+                         --         AND a.source_type NOT IN ('social media', 'practice website') 
+                                  THEN fl.application_id END)) / 
+    NULLIFZERO(COUNT(DISTINCT CASE WHEN a.source_type NOT IN ('social media', 'practice website') 
+                                  THEN a.application_id END)) AS application_win_rate_14
+FROM Other_v4_dependent m
+LEFT JOIN (
+    SELECT * 
+    FROM prep.data_staging.int_applications_collapsed 
+    WHERE is_demo = FALSE 
+      AND application_status <> 'PREAPPROVED' 
+      AND ORGANIZATION_ID != '17450' 
+      AND application_status <> 'FROZEN' 
+      AND application_status <> 'UNLICENSED'
+) a ON m.merchant_id = a.merchant_id
+    AND m.shopped_date BETWEEN DATE(a.created_at_pt) - 55 AND DATE(a.created_at_pt) + 5
+LEFT JOIN (
+    SELECT DISTINCT application_id, loan_status, FUNDED_AT_PT 
+    FROM prep.data_staging.int_funded_information_pt
+) fl ON a.application_id = fl.application_id
+    AND DATE(a.created_at_pt) >= DATE(fl.funded_at_pt) - 30
+GROUP BY 1, 2 
+HAVING COUNT(DISTINCT CASE WHEN a.source_type NOT IN ('social media', 'practice website') 
+                          THEN a.application_id END) > 3;
+
+
+
+
+
+
+
+
+
+
+
+
+
+/* Transaction $ */
+CREATE OR REPLACE TEMP TABLE Other_v4_transactions_60 AS
+WITH loans AS (
+    SELECT a.*, b.loan_id, funded_date, purchase_amount, b.ORIGINAL_APR,ORIGINAL_LOAN_TERM
+    FROM Other_v4_dependent a
+    LEFT JOIN (
+        SELECT merchant_id, loan_id, purchase_amount, DATE(funded_at_pt) AS funded_date, ORIGINAL_APR,ORIGINAL_LOAN_TERM
+        FROM prod.core_marts.loan_info_xf
+        WHERE loan_status IN ('FUNDED', 'AWAITING_FUNDING')
+    ) b ON a.merchant_id = b.merchant_id
+    AND a.shopped_date BETWEEN DATE(funded_date) - 55 AND DATE(funded_date) + 5
+)
+SELECT 
+    merchant_id, 
+    go_live_date, 
+    shopped_date, 
+    mystery_shopping_assessment, 
+    COUNT(DISTINCT loan_id) AS loans_distinct,
+    median(ORIGINAL_LOAN_TERM) as loan_term,
+    ZEROIFNULL(SUM(purchase_amount)) AS transactions_60d,
+    CASE 
+        WHEN COUNT(DISTINCT loan_id) > 0 
+        THEN (COUNT(DISTINCT CASE WHEN ORIGINAL_APR = 0 THEN loan_id END) * 100.0) / COUNT(DISTINCT loan_id)
+        ELSE 0 
+    END AS pct_loans_zero_apr,
+     CASE 
+        WHEN COUNT(DISTINCT loan_id) > 0 
+        THEN (COUNT(DISTINCT CASE WHEN ORIGINAL_APR = 0 and ORIGINAL_LOAN_TERM < 9 THEN loan_id END) * 100.0) / COUNT(DISTINCT loan_id)
+        ELSE 0 
+    END AS pct_loans_zero_apr_Short_Term,
+    CASE 
+        WHEN COUNT(DISTINCT loan_id) > 0 
+        THEN (COUNT(DISTINCT CASE WHEN ORIGINAL_APR = 0 and ORIGINAL_LOAN_TERM > 12 THEN loan_id END) * 100.0) / COUNT(DISTINCT loan_id)
+        ELSE 0 
+    END AS pct_loans_long_term
+FROM loans
+GROUP BY 1, 2, 3, 4;
+
+
+
+CREATE OR REPLACE TEMP TABLE Other_v4_transactions_365 AS
+WITH loans AS (
+    SELECT a.*, b.loan_id, funded_date, purchase_amount, b.ORIGINAL_APR,ORIGINAL_LOAN_TERM
+    FROM Other_v4_dependent a
+    LEFT JOIN (
+        SELECT merchant_id, loan_id, purchase_amount, DATE(funded_at_pt) AS funded_date, ORIGINAL_APR,ORIGINAL_LOAN_TERM
+        FROM prod.core_marts.loan_info_xf
+        WHERE loan_status IN ('FUNDED', 'AWAITING_FUNDING')
+    ) b ON a.merchant_id = b.merchant_id
+  --  AND a.shopped_date BETWEEN DATE(funded_date) - 310 AND DATE(funded_date) + 55
+)
+SELECT 
+    merchant_id, 
+    go_live_date, 
+    shopped_date, 
+    mystery_shopping_assessment, 
+    COUNT(DISTINCT loan_id) AS loans_distinct,
+    ZEROIFNULL(SUM(purchase_amount)) AS transactions_60d,
+    CASE 
+        WHEN COUNT(DISTINCT loan_id) > 0 
+        THEN (COUNT(DISTINCT CASE WHEN ORIGINAL_APR = 0 THEN loan_id END) * 100.0) / COUNT(DISTINCT loan_id)
+        ELSE 0 
+    END AS pct_loans_zero_apr,
+     CASE 
+        WHEN COUNT(DISTINCT loan_id) > 0 
+        THEN (COUNT(DISTINCT CASE WHEN ORIGINAL_APR = 0 and ORIGINAL_LOAN_TERM < 9 THEN loan_id END) * 100.0) / COUNT(DISTINCT loan_id)
+        ELSE 0 
+    END AS pct_loans_zero_apr_Short_Term
+FROM loans
+GROUP BY 1, 2, 3, 4;
+
+
+
+CREATE OR REPLACE TEMP TABLE Other_v4_transactions_30 AS
+WITH loans AS (
+    SELECT a.*, b.loan_id, funded_date, purchase_amount 
+    FROM Other_v4_dependent a
+    LEFT JOIN (
+        SELECT merchant_id, loan_id, purchase_amount, DATE(funded_at_pt) AS funded_date
+        FROM prod.core_marts.loan_info_xf
+        WHERE loan_status IN ('FUNDED', 'AWAITING_FUNDING')
+    ) b ON a.merchant_id = b.merchant_id
+    AND a.shopped_date BETWEEN DATE(funded_date) - 25 AND DATE(funded_date) + 5
+)
+SELECT merchant_id, go_live_date, shopped_date, mystery_shopping_assessment, COUNT(DISTINCT loan_id) AS loans_distinct, ZEROIFNULL(SUM(purchase_amount)) AS transactions_30d
+FROM loans
+GROUP BY 1, 2, 3, 4;
+
+
+
+
+
+
+
+
+CREATE OR REPLACE TEMP TABLE Other_v4_model_score AS
+WITH applications AS (
+    SELECT
+        m.merchant_id,
+        m.mystery_shopping_assessment,
+        m.shopped_date,
+        a.application_id,
+        a.created_date,
+        a.model_score,
+        a.model_score_unadjusted
+    FROM Other_v4_dependent m
+    LEFT JOIN (
+        SELECT DISTINCT
+            a.application_id AS application_id,
+            a.merchant_id,
+            a.organization_id,
+            MAX(b.BUREAU_MODEL_PRED_ADJ) AS model_score,
+            MAX(b.BUREAU_MODEL_PRED) AS model_score_unadjusted,
+            DATE(MIN(a.created_at_pt)) AS created_date
+        FROM prep.data_staging.int_applications_collapsed a
+        LEFT JOIN risk.risk_tables.risk_application b
+            ON a.application_id = b.id
+        WHERE b.BUREAU_MODEL_PRED_ADJ IS NOT NULL
+        GROUP BY 1, 2, 3
+    ) a
+        ON m.merchant_id = a.merchant_id
+        AND m.shopped_date BETWEEN a.created_date - 55 AND a.created_date + 5
+    WHERE a.merchant_id IS NOT NULL
+      AND a.ORGANIZATION_ID != '17450'
+)
+
+, applications_with_score AS (
+    SELECT
+        merchant_id,
+        mystery_shopping_assessment,
+        COUNT(DISTINCT application_id) AS applications,
+        MEDIAN(model_score) AS median_model_score,
+        MEDIAN(model_score_unadjusted) AS median_model_score_unadjusted
+    FROM applications
+    GROUP BY 1, 2
+)
+
+SELECT
+    *,
+    ROUND(PERCENT_RANK() OVER (ORDER BY median_model_score DESC) * 100, 0) AS model_score_percentile
+FROM applications_with_score
+WHERE applications >= 3
+  AND median_model_score IS NOT NULL;
+
+
+
+CREATE OR REPLACE TEMP TABLE Other_v4_vantage_vs_risk_score AS
+WITH applications AS (
+    SELECT 
+        m.merchant_id, 
+        m.mystery_shopping_assessment, 
+        m.shopped_date, 
+        a.application_id, 
+        a.created_date, 
+        a.avg_vantage_score,
+        a.avg_risk_score
+    FROM Other_v4_dependent m
+    LEFT JOIN (
+        SELECT DISTINCT 
+            a.application_id AS application_id, 
+            a.merchant_id, 
+            a.organization_id, 
+            AVG(CASE WHEN b.RISK_SCORE < 100 THEN 480 ELSE b.RISK_SCORE END) AS avg_risk_score,
+            AVG(CASE WHEN b.VANTAGE4SCORE < 100 THEN 480 ELSE b.VANTAGE4SCORE END) AS avg_vantage_score,
+            DATE(MIN(a.created_at_pt)) AS created_date
+        FROM prep.data_staging.int_applications_collapsed a
+        LEFT JOIN risk.risk_tables.risk_application b ON a.application_id = b.id
+        WHERE b.BUREAU_MODEL_PRED_ADJ IS NOT NULL 
+            AND b.VANTAGE4SCORE IS NOT NULL 
+            AND b.RISK_SCORE IS NOT NULL
+        GROUP BY 1, 2, 3
+    ) a ON m.merchant_id = a.merchant_id
+        AND m.shopped_date BETWEEN a.created_date - 360 AND a.created_date + 5
+    WHERE a.merchant_id IS NOT NULL 
+        AND a.ORGANIZATION_ID != '17450'
+)
+, applications_with_score AS (
+    SELECT 
+        merchant_id, 
+        mystery_shopping_assessment, 
+        COUNT(DISTINCT application_id) AS applications, 
+        AVG(avg_vantage_score) AS avg_vantage_score,
+        AVG(avg_risk_score) AS avg_risk_score,
+        AVG(avg_vantage_score) - AVG(avg_risk_score) AS risk_difference
+    FROM applications
+    GROUP BY 1, 2
+)
+SELECT *
+FROM applications_with_score
+WHERE applications >= 10;
+
+
+
+
+
+
+
+CREATE OR REPLACE TEMP TABLE Other_v4_cherry_share_60d_new AS
+WITH closest_scrape AS (
+SELECT 
+  b.CHERRY_MERCHANT_ID,
+  MONTHLY_PRACTICE_CARECREDIT_USAGE_VOLUME,
+  ROW_NUMBER() OVER (PARTITION BY CHERRY_MERCHANT_ID ORDER BY ABS(DATEDIFF(day, SCRAPE_DATE, SHOPPED_DATE))) as rn
+FROM prod.core_marts.carecredit_snapshot_xf b
+CROSS JOIN Other_v4_transactions_60 
+)
+SELECT 
+a.*,
+b.MONTHLY_PRACTICE_CARECREDIT_USAGE_VOLUME AS monthly_carecredit_volume,
+a.transactions_60d / NULLIF((a.transactions_60d + b.MONTHLY_PRACTICE_CARECREDIT_USAGE_VOLUME * 2), 0) AS cherry_share_60d_1,
+t.transactions_30d / NULLIF((t.transactions_30d + b.MONTHLY_PRACTICE_CARECREDIT_USAGE_VOLUME), 0) AS cherry_share_30d,
+CASE
+  WHEN cherry_share_30d IS NULL AND cherry_share_60d_1 IS NULL THEN NULL
+  WHEN cherry_share_30d IS NULL THEN cherry_share_60d_1
+  WHEN cherry_share_60d_1 IS NULL THEN cherry_share_30d
+  ELSE GREATEST(cherry_share_30d, cherry_share_60d_1)
+END AS cherry_share_60d_new,
+CASE 
+  WHEN a.LOANS_DISTINCT > 2 THEN TRANSACTIONS_60D/a.LOANS_DISTINCT
+  ELSE NULL
+END as loan_size
+FROM Other_v4_transactions_60 a
+LEFT JOIN Other_v4_transactions_30 t ON a.merchant_id = t.merchant_id
+LEFT JOIN closest_scrape b ON a.merchant_id = b.CHERRY_MERCHANT_ID AND b.rn = 1;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+create or replace temp table Other_v4_loans as
+    SELECT DISTINCT
+        m.merchant_id,
+        COALESCE(SUM(a90.loans), 0) AS loans_90d,
+        COALESCE(SUM(a90.transactions), 0) AS transactions_90d_around_shop
+    FROM Other_v4_dependent m
+    LEFT JOIN (
+        SELECT DISTINCT 
+            l.merchant_id,
+            m2.shopped_date,
+            COUNT(DISTINCT l.loan_id) AS loans,
+            SUM(l.gross_amount) AS transactions
+        FROM prod.core_marts.loan_info_xf l
+        INNER JOIN Other_v4_dependent m2
+            ON l.merchant_id = m2.merchant_id
+            AND DATE(l.funded_at_pt) BETWEEN m2.shopped_date - 85 AND m2.shopped_date + 5
+        WHERE l.loan_status IN ('FUNDED', 'AWAITING_FUNDING')
+        GROUP BY 1, 2
+    ) a90
+        ON m.merchant_id = a90.merchant_id AND m.shopped_date = a90.shopped_date
+    GROUP BY 1
+;
+
+
+CREATE OR REPLACE TEMP TABLE merchant_level_health_dispute_rate_all_time AS
+SELECT 
+    m.merchant_id,
+    COUNT(DISTINCT l.loan_id) AS loans,
+    COUNT(DISTINCT d.loan_id) AS disputed_loans,
+    COUNT(DISTINCT d.loan_id) * 1.0 / NULLIF(COUNT(DISTINCT l.loan_id), 0) AS dispute_rate
+FROM Other_v4_dependent m
+LEFT JOIN prod.core_marts.loan_info_xf l 
+    ON l.merchant_id = m.merchant_id
+    AND l.loan_status IN ('FUNDED', 'AWAITING_FUNDING')
+LEFT JOIN raw.mariadb_fivetran_servicing_service_master.disputes d 
+    ON d.loan_id = l.loan_id
+GROUP BY 1;
+
+
+select * from raw.mariadb_fivetran_servicing_service_master.disputes;
+
+
+CREATE OR REPLACE TEMP TABLE Other_v4_applications_60d AS
+WITH applications AS (
+    SELECT m.merchant_id, m.mystery_shopping_assessment, m.shopped_date, a.application_id, a.created_date, application_status
+    FROM Other_v4_dependent m
+    LEFT JOIN (
+        SELECT DISTINCT a.application_id AS application_id, a.merchant_id, a.organization_id, application_status, DATE(MIN(a.created_at_pt)) AS created_date
+        FROM prep.data_staging.int_applications_collapsed a
+        WHERE is_demo = FALSE AND application_status <> 'PREAPPROVED'  AND a.ORGANIZATION_ID != '17450'
+        GROUP BY 1, 2, 3, 4
+    ) a ON m.merchant_id = a.merchant_id
+    AND m.shopped_date BETWEEN a.created_date - 55 AND a.created_date + 5
+)
+SELECT merchant_id, mystery_shopping_assessment, ZEROIFNULL(COUNT(DISTINCT application_id)) AS applications
+FROM applications
+GROUP BY 1, 2;
+
+
+
+CREATE OR REPLACE TEMP TABLE Other_v4_practice_potential_60d_3 AS
+SELECT 
+    a.*, 
+    c.expected_monthly_cherry_volume_v4,
+    -- Calculate practice_share conditionally based on whether expected_monthly_cherry_volume is NULL
+    LEAST(a.transactions_60d / NULLIF((c.expected_monthly_cherry_volume_v4 * 2), 0), 1) AS cherry_share_pp_v4,
+    LEAST(a.transactions_60d / NULLIF((c.RAW_EXPECTED_MONTHLY_CHERRY_VOLUME_v4 * 2), 0), 1) AS cherry_share_pp_v4_RAW,
+
+    LEAST(a.transactions_60d / NULLIF((c.expected_monthly_cherry_volume_v4_seasonally_adjusted * 2), 0), 1) AS cherry_share_pp_v4s
+FROM Other_v4_transactions_60 a
+LEFT JOIN prep.revenue_migration.enhanced_practice_potential_v4 c ON a.merchant_id = c.merchant_id;
+/* Sample inclusions low trust score at-risks */
+
+CREATE OR REPLACE TEMP TABLE Other_v4_pct_max_term AS
+with max_promo_possible as (
+    select l.merchant_id, l.ID as loan_id, a.ID as app_id, max(p.PROMO_TERM) as max_promo_term, max(p.TERM) as max_term, l.TERM as actual_term
+    from risk.RISK_TABLES.RISK_LOAN as l
+    left join risk.RISK_TABLES.RISK_APPLICATION as a on l.APPLICATION_ID = a.ID and a.STATUS = 'APPROVED'
+    join raw.MARIADB_FIVETRAN_PRODUCT_SERVICE_MASTER.PRODUCT as p on a.ID = p.APPLICATION_ID
+                                                                         and p.STATUS = 'ACTIVE'
+                                                                         and p._FIVETRAN_DELETED = False
+                                                                    --  and p.IS_PROMO_ENABLED = False
+                                                                      --   and p.PROMO_TERM <= 24
+    where l.STATUS = 'FUNDED'
+    group by 1, 2, 3, 6
+)
+select 
+    merchant_id,
+    count(*) as loan_count,
+    avg(max_promo_term) as avg_max_promo_term,
+    avg(max_term) as avg_max_term,
+    avg(actual_term) as avg_actual_term,
+    sum(case when max_term = actual_term then 1 else 0 end) * 100.0 / count(*) as pct_loans_at_max_term
+from max_promo_possible
+group by merchant_id
+order by merchant_id;
+
+
+CREATE OR REPLACE TEMP TABLE Other_v4_practice_potential_60d_2 AS
+
+SELECT 
+    a.*, 
+    c.expected_monthly_cherry_volume_v2,
+    -- Calculate practice_share conditionally based on whether expected_monthly_cherry_volume is NULL
+    LEAST(a.transactions_60d / NULLIF((c.expected_monthly_cherry_volume_v2 * 2), 0), 1) AS cherry_share_pp_v2,
+    LEAST(a.transactions_60d / NULLIF((c.expected_monthly_cherry_volume_v2_seasonally_adjusted * 2), 0), 1) AS cherry_share_pp_v2s
+FROM Other_v4_transactions_60 a
+LEFT JOIN prep.revenue_migration.enhanced_practice_potential_v2 c ON a.merchant_id = c.merchant_id;
+/* Sample inclusions low trust score at-risks */
+
+
+
+create or replace temp table Other_model_comp_list2 as
+WITH base_data AS (
+    SELECT 
+        a.primary_merchant_id,
+        a.financing_options_on_website,
+        w.first_look_option_c AS first_look_web,
+        w.second_look_option_c AS second_look_web,
+        w.third_look_option_c AS third_look_web,
+        w.fourth_look_option_c AS fourth_look_web,
+        w.fifth_look_option_c AS fifth_look_web,
+        w.sixth_look_option_c AS sixth_look_web,
+        ms.FIRST_LOOK_OPTION_C,
+        ms.SECOND_LOOK_OPTION_C,
+        ms.THIRD_LOOK_OPTION_C,
+        ms.FOURTH_LOOK_OPTION_C,
+        ms.FIFTH_LOOK_OPTION_C,
+        ms.SIXTH_LOOK_OPTION_C,
+        CASE WHEN cc.CHERRY_MERCHANT_ID IS NOT NULL THEN 'CareCredit' ELSE 'None' END AS CC_match,
+        CASE WHEN pf.primary_merchant_id IS NOT NULL THEN 'PatientFi' ELSE 'None' END AS PF_match,
+        
+        -- Scrape Competitor List 1 (includes all sources)
+        TRIM(
+            REPLACE(REPLACE(REPLACE(
+                COALESCE(a.financing_options_on_website, '') || 
+                CASE WHEN w.first_look_option_c IS NOT NULL AND w.first_look_option_c != 'None' THEN '; ' || w.first_look_option_c ELSE '' END ||
+                CASE WHEN w.second_look_option_c IS NOT NULL AND w.second_look_option_c != 'None' THEN '; ' || w.second_look_option_c ELSE '' END ||
+                CASE WHEN w.third_look_option_c IS NOT NULL AND w.third_look_option_c != 'None' THEN '; ' || w.third_look_option_c ELSE '' END ||
+                CASE WHEN w.fourth_look_option_c IS NOT NULL AND w.fourth_look_option_c != 'None' THEN '; ' || w.fourth_look_option_c ELSE '' END ||
+                CASE WHEN w.fifth_look_option_c IS NOT NULL AND w.fifth_look_option_c != 'None' THEN '; ' || w.fifth_look_option_c ELSE '' END ||
+                CASE WHEN w.sixth_look_option_c IS NOT NULL AND w.sixth_look_option_c != 'None' THEN '; ' || w.sixth_look_option_c ELSE '' END ||
+                CASE WHEN ms.FIRST_LOOK_OPTION_C IS NOT NULL AND ms.FIRST_LOOK_OPTION_C != 'None' THEN '; ' || ms.FIRST_LOOK_OPTION_C ELSE '' END ||
+                CASE WHEN ms.SECOND_LOOK_OPTION_C IS NOT NULL AND ms.SECOND_LOOK_OPTION_C != 'None' THEN '; ' || ms.SECOND_LOOK_OPTION_C ELSE '' END ||
+                CASE WHEN ms.THIRD_LOOK_OPTION_C IS NOT NULL AND ms.THIRD_LOOK_OPTION_C != 'None' THEN '; ' || ms.THIRD_LOOK_OPTION_C ELSE '' END ||
+                CASE WHEN ms.FOURTH_LOOK_OPTION_C IS NOT NULL AND ms.FOURTH_LOOK_OPTION_C != 'None' THEN '; ' || ms.FOURTH_LOOK_OPTION_C ELSE '' END ||
+                CASE WHEN ms.FIFTH_LOOK_OPTION_C IS NOT NULL AND ms.FIFTH_LOOK_OPTION_C != 'None' THEN '; ' || ms.FIFTH_LOOK_OPTION_C ELSE '' END ||
+                CASE WHEN ms.SIXTH_LOOK_OPTION_C IS NOT NULL AND ms.SIXTH_LOOK_OPTION_C != 'None' THEN '; ' || ms.SIXTH_LOOK_OPTION_C ELSE '' END ||
+                CASE WHEN cc.CHERRY_MERCHANT_ID IS NOT NULL THEN '; CareCredit' ELSE '' END ||
+                CASE WHEN pf.primary_merchant_id IS NOT NULL THEN '; PatientFi' ELSE '' END,
+                '; ; ', '; '), ';;', '; '), 'Proceed Financial; Proceed', 'Proceed Financial'),
+            '; '
+        ) AS scrape_competitor_list_1,
+        
+        -- Active Competitor List 1 (excludes CC_match and PF_match)  
+        TRIM(
+            REPLACE(REPLACE(REPLACE(
+                COALESCE(a.financing_options_on_website, '') || 
+                CASE WHEN w.first_look_option_c IS NOT NULL AND w.first_look_option_c != 'None' THEN '; ' || w.first_look_option_c ELSE '' END ||
+                CASE WHEN w.second_look_option_c IS NOT NULL AND w.second_look_option_c != 'None' THEN '; ' || w.second_look_option_c ELSE '' END ||
+                CASE WHEN w.third_look_option_c IS NOT NULL AND w.third_look_option_c != 'None' THEN '; ' || w.third_look_option_c ELSE '' END ||
+                CASE WHEN w.fourth_look_option_c IS NOT NULL AND w.fourth_look_option_c != 'None' THEN '; ' || w.fourth_look_option_c ELSE '' END ||
+                CASE WHEN w.fifth_look_option_c IS NOT NULL AND w.fifth_look_option_c != 'None' THEN '; ' || w.fifth_look_option_c ELSE '' END ||
+                CASE WHEN w.sixth_look_option_c IS NOT NULL AND w.sixth_look_option_c != 'None' THEN '; ' || w.sixth_look_option_c ELSE '' END ||
+                CASE WHEN ms.FIRST_LOOK_OPTION_C IS NOT NULL AND ms.FIRST_LOOK_OPTION_C != 'None' THEN '; ' || ms.FIRST_LOOK_OPTION_C ELSE '' END ||
+                CASE WHEN ms.SECOND_LOOK_OPTION_C IS NOT NULL AND ms.SECOND_LOOK_OPTION_C != 'None' THEN '; ' || ms.SECOND_LOOK_OPTION_C ELSE '' END ||
+                CASE WHEN ms.THIRD_LOOK_OPTION_C IS NOT NULL AND ms.THIRD_LOOK_OPTION_C != 'None' THEN '; ' || ms.THIRD_LOOK_OPTION_C ELSE '' END ||
+                CASE WHEN ms.FOURTH_LOOK_OPTION_C IS NOT NULL AND ms.FOURTH_LOOK_OPTION_C != 'None' THEN '; ' || ms.FOURTH_LOOK_OPTION_C ELSE '' END ||
+                CASE WHEN ms.FIFTH_LOOK_OPTION_C IS NOT NULL AND ms.FIFTH_LOOK_OPTION_C != 'None' THEN '; ' || ms.FIFTH_LOOK_OPTION_C ELSE '' END ||
+                CASE WHEN ms.SIXTH_LOOK_OPTION_C IS NOT NULL AND ms.SIXTH_LOOK_OPTION_C != 'None' THEN '; ' || ms.SIXTH_LOOK_OPTION_C ELSE '' END,
+                '; ; ', '; '), ';;', '; '), 'Proceed Financial; Proceed', 'Proceed Financial'),
+            '; '
+        ) AS active_competitor_list_1
+
+    FROM prod.core_marts.practice_info_xf a
+    LEFT JOIN risk.practice_intelligence.daily_web_review w 
+        ON a.primary_merchant_id = w.merchant_id
+    LEFT JOIN Other_v4_dependent ms 
+        ON a.primary_merchant_id = ms.merchant_id
+    LEFT JOIN (
+        SELECT DISTINCT CHERRY_MERCHANT_ID 
+        FROM prod.core_marts.carecredit_snapshot_xf
+    ) cc ON a.primary_merchant_id = cc.CHERRY_MERCHANT_ID
+    LEFT JOIN (
+        SELECT DISTINCT primary_merchant_id 
+        FROM raw.data_platform.practice_competitor_scrape_matches_patientfi
+        WHERE (PATIENTFI_MATCH_TYPE = 'address' AND MATCH_SCORE = 100)
+           OR (PATIENTFI_MATCH_TYPE = 'name & zipcode' AND MATCH_SCORE > 85)
+           OR (PATIENTFI_MATCH_TYPE = 'name' AND MATCH_SCORE > 95)
+    ) pf ON a.primary_merchant_id = pf.primary_merchant_id
+),
+
+-- Parse scrape competitors into individual rows
+scrape_competitors AS (
+    SELECT 
+        primary_merchant_id,
+        TRIM(competitor.value) AS competitor_name
+    FROM base_data,
+    LATERAL SPLIT_TO_TABLE(scrape_competitor_list_1, ';') competitor
+    WHERE TRIM(competitor.value) IS NOT NULL 
+      AND TRIM(competitor.value) != '' 
+      AND TRIM(competitor.value) != 'None'
+),
+
+-- Parse active competitors into individual rows
+active_competitors AS (
+    SELECT 
+        primary_merchant_id,
+        TRIM(competitor.value) AS competitor_name
+    FROM base_data,
+    LATERAL SPLIT_TO_TABLE(active_competitor_list_1, ';') competitor
+    WHERE TRIM(competitor.value) IS NOT NULL 
+      AND TRIM(competitor.value) != '' 
+      AND TRIM(competitor.value) != 'None'
+),
+
+-- Count unique scrape competitors per merchant
+scrape_counts AS (
+    SELECT 
+        primary_merchant_id,
+        COUNT(DISTINCT competitor_name) AS scrape_count
+    FROM scrape_competitors
+    GROUP BY primary_merchant_id
+),
+
+-- Count unique active competitors per merchant
+active_counts AS (
+    SELECT 
+        primary_merchant_id,
+        COUNT(DISTINCT competitor_name) AS active_count
+    FROM active_competitors
+    GROUP BY primary_merchant_id
+),
+
+-- Count unique scrape competitors per merchant (excluding Cherry)
+scrape_counts_no_cherry AS (
+    SELECT 
+        primary_merchant_id,
+        COUNT(DISTINCT competitor_name) AS scrape_count_no_cherry
+    FROM scrape_competitors
+    WHERE competitor_name != 'Cherry'
+    GROUP BY primary_merchant_id
+),
+
+-- Count unique active competitors per merchant (excluding Cherry)
+active_counts_no_cherry AS (
+    SELECT 
+        primary_merchant_id,
+        COUNT(DISTINCT competitor_name) AS active_count_no_cherry
+    FROM active_competitors
+    WHERE competitor_name != 'Cherry'
+    GROUP BY primary_merchant_id
+),
+
+-- Check for non-Cherry/CareCredit competitors in scrape list
+scrape_non_cherry_cc AS (
+    SELECT 
+        primary_merchant_id,
+        CASE WHEN COUNT(DISTINCT competitor_name) > 0 THEN 1 ELSE 0 END AS non_cherry_carecredit
+    FROM scrape_competitors
+    WHERE competitor_name NOT IN ('Cherry', 'CareCredit')
+    GROUP BY primary_merchant_id
+),
+
+-- Check for non-Cherry/CareCredit competitors in active list
+active_non_cherry_cc AS (
+    SELECT 
+        primary_merchant_id,
+        CASE WHEN COUNT(DISTINCT competitor_name) > 0 THEN 1 ELSE 0 END AS non_cherry_carecredit_active
+    FROM active_competitors
+    WHERE competitor_name NOT IN ('Cherry', 'CareCredit')
+    GROUP BY primary_merchant_id
+)
+
+-- Final SELECT with all columns
+SELECT 
+    bd.primary_merchant_id,
+    bd.financing_options_on_website,
+    bd.first_look_web,
+    bd.second_look_web,
+    bd.third_look_web,
+    bd.fourth_look_web,
+    bd.fifth_look_web,
+    bd.sixth_look_web,
+    bd.FIRST_LOOK_OPTION_C,
+    bd.SECOND_LOOK_OPTION_C,
+    bd.THIRD_LOOK_OPTION_C,
+    bd.FOURTH_LOOK_OPTION_C,
+    bd.FIFTH_LOOK_OPTION_C,
+    bd.SIXTH_LOOK_OPTION_C,
+    bd.CC_match,
+    bd.PF_match,
+    bd.scrape_competitor_list_1,
+    bd.active_competitor_list_1,
+    COALESCE(sc.scrape_count, 0) AS scrape_count,
+    COALESCE(ac.active_count, 0) AS active_count,
+     COALESCE(scnc.scrape_count_no_cherry, 0) AS scrape_competitor_count,
+    COALESCE(acnc.active_count_no_cherry, 0) AS active_competitor_count,
+    COALESCE(sncc.non_cherry_carecredit, 0) AS non_cherry_carecredit,
+    COALESCE(ancc.non_cherry_carecredit_active, 0) AS non_cherry_carecredit_active
+
+FROM base_data bd
+LEFT JOIN scrape_counts sc ON bd.primary_merchant_id = sc.primary_merchant_id
+LEFT JOIN active_counts ac ON bd.primary_merchant_id = ac.primary_merchant_id
+LEFT JOIN scrape_counts_no_cherry scnc ON bd.primary_merchant_id = scnc.primary_merchant_id
+LEFT JOIN active_counts_no_cherry acnc ON bd.primary_merchant_id = acnc.primary_merchant_id
+LEFT JOIN scrape_non_cherry_cc sncc ON bd.primary_merchant_id = sncc.primary_merchant_id
+LEFT JOIN active_non_cherry_cc ancc ON bd.primary_merchant_id = ancc.primary_merchant_id;
+
+
+CREATE OR REPLACE TEMP TABLE Other_v4_above_median_60d AS
+SELECT m.merchant_id, m.mystery_shopping_assessment, m.shopped_date, COUNT(DISTINCT borrower_id) AS borrowers, 
+    COUNT(DISTINCT CASE WHEN vantage4score >= median_vantage THEN borrower_id ELSE NULL END) AS above_median_borrowers, 
+    above_median_borrowers / NULLIFZERO(borrowers) AS above_median_rate_60d
+FROM Other_v4_dependent m
+LEFT JOIN (
+    SELECT a.id, DATE(stg_a.created_at_pt) AS created_date, stg_a.merchant_id, a.borrower_id, add.zip, r.vantage4score, v.median_vantage
+    FROM RAW.MARIADB_FIVETRAN_APPLICATION_SERVICE_MASTER.application a
+    LEFT JOIN risk.risk_tables.risk_application r ON a.id = r.id
+    LEFT JOIN prep.data_staging.int_applications_collapsed stg_a ON a.id = stg_a.application_id
+    LEFT JOIN RAW.MARIADB_FIVETRAN_BORROWER_SERVICE_MASTER.BORROWER b ON a.borrower_id = b.ID
+    LEFT JOIN RAW.MARIADB_FIVETRAN_BORROWER_SERVICE_MASTER.borrower_address add ON b.address_id = add.id
+    LEFT JOIN risk.practice_intelligence.median_vantage_zipcode v ON add.zip = v.zipcode
+    WHERE median_vantage IS NOT NULL AND vantage4score IS NOT NULL AND stg_a.ORGANIZATION_ID != '17450'
+) a ON m.merchant_id = a.merchant_id
+AND m.shopped_date BETWEEN a.created_date - 55 AND a.created_date + 5
+GROUP BY 1, 2, 3
+HAVING borrowers > 3;
+
+create or replace temp table Other_model_disputes as
+   SELECT DISTINCT
+    i.organization_id,
+    SUM(a.disputes) AS disputes_60d_around_shop,
+    SUM(a.ns_disputes) AS nonservices_disputes_60d_around_shop,
+    SUM(a.pc_disputes) AS practice_closed_disputes_60d_around_shop,
+    SUM(scam.scam_disputes) AS scam_disputes_60d_around_shop,
+    SUM(a1.disputes) AS disputes_1d_around_shop,
+    SUM(a7.disputes) AS disputes_7d_around_shop,
+    SUM(a30.disputes) AS disputes_30d_around_shop,
+    SUM(a30.ns_disputes) AS nonservices_disputes_30d_around_shop,
+    SUM(a30.pc_disputes) AS practice_closed_disputes_30d_around_shop,
+    SUM(a90.disputes) AS disputes_90d_around_shop,
+    SUM(a90.ns_disputes) AS nonservices_disputes_90d_around_shop,
+    SUM(a90.pc_disputes) AS practice_closed_disputes_90d_around_shop
+FROM Other_v4_dependent m
+LEFT JOIN prep.core_staging.stg_merchants i
+    ON m.merchant_id = i.merchant_id
+LEFT JOIN (
+    SELECT DISTINCT 
+        d.merchant_id,
+        m2.shopped_date,
+        COUNT(DISTINCT d.borrower_id) AS disputes,
+        COUNT(DISTINCT CASE WHEN d.additional_services ILIKE '%product%' OR d.additional_services ILIKE '%training%' THEN d.borrower_id END) AS ns_disputes,
+        COUNT(DISTINCT CASE WHEN d.partial_services_reason ILIKE '%closed%' THEN d.borrower_id END) AS pc_disputes
+    FROM raw.mariadb_fivetran_servicing_service_master.disputes d
+    INNER JOIN Other_v4_dependent m2
+        ON d.merchant_id = m2.merchant_id
+        AND DATE(d.created_at) BETWEEN m2.shopped_date - 55 AND m2.shopped_date + 5
+    WHERE d.status NOT IN ('CANCELLED', 'DRAFTED')
+    GROUP BY 1, 2
+) a
+    ON m.merchant_id = a.merchant_id AND m.shopped_date = a.shopped_date
+LEFT JOIN (
+    SELECT DISTINCT 
+        d.merchant_id,
+        m2.shopped_date,
+        COUNT(DISTINCT d.borrower_id) AS disputes,
+        COUNT(DISTINCT CASE WHEN d.additional_services ILIKE '%product%' OR d.additional_services ILIKE '%training%' THEN d.borrower_id END) AS ns_disputes,
+        COUNT(DISTINCT CASE WHEN d.partial_services_reason ILIKE '%closed%' THEN d.borrower_id END) AS pc_disputes
+    FROM raw.mariadb_fivetran_servicing_service_master.disputes d
+    INNER JOIN Other_v4_dependent m2
+        ON d.merchant_id = m2.merchant_id
+        AND DATE(d.created_at) BETWEEN m2.shopped_date - 55 AND m2.shopped_date + 5
+    WHERE d.status NOT IN ('CANCELLED', 'DRAFTED')
+    GROUP BY 1, 2
+) a30
+    ON m.merchant_id = a30.merchant_id AND m.shopped_date = a30.shopped_date
+LEFT JOIN (
+    SELECT DISTINCT 
+        d.merchant_id,
+        m2.shopped_date,
+        COUNT(DISTINCT d.borrower_id) AS disputes,
+        COUNT(DISTINCT CASE WHEN d.additional_services ILIKE '%product%' OR d.additional_services ILIKE '%training%' THEN d.borrower_id END) AS ns_disputes,
+        COUNT(DISTINCT CASE WHEN d.partial_services_reason ILIKE '%closed%' THEN d.borrower_id END) AS pc_disputes
+    FROM raw.mariadb_fivetran_servicing_service_master.disputes d
+    INNER JOIN Other_v4_dependent m2
+        ON d.merchant_id = m2.merchant_id
+        AND DATE(d.created_at) BETWEEN m2.shopped_date - 55 AND m2.shopped_date + 5
+    WHERE d.status NOT IN ('CANCELLED', 'DRAFTED')
+    GROUP BY 1, 2
+) a90
+    ON m.merchant_id = a90.merchant_id AND m.shopped_date = a90.shopped_date
+LEFT JOIN (
+    SELECT DISTINCT 
+        d.merchant_id,
+        m2.shopped_date,
+        COUNT(DISTINCT d.borrower_id) AS disputes
+    FROM (
+        SELECT * 
+        FROM raw.mariadb_fivetran_servicing_service_master.disputes 
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY loan_id ORDER BY created_at ASC) = 1
+    ) d
+    INNER JOIN Other_v4_dependent m2
+        ON d.merchant_id = m2.merchant_id
+        AND DATE(d.created_at) BETWEEN m2.shopped_date - 1 AND m2.shopped_date + 1
+    WHERE d.status NOT IN ('CANCELLED', 'DRAFTED')
+    GROUP BY 1, 2
+) a1
+    ON m.merchant_id = a1.merchant_id AND m.shopped_date = a1.shopped_date
+LEFT JOIN (
+    SELECT DISTINCT 
+        d.merchant_id,
+        m2.shopped_date,
+        COUNT(DISTINCT d.borrower_id) AS disputes
+    FROM raw.mariadb_fivetran_servicing_service_master.disputes d
+    INNER JOIN Other_v4_dependent m2
+        ON d.merchant_id = m2.merchant_id
+        AND DATE(d.created_at) BETWEEN m2.shopped_date - 3 AND m2.shopped_date + 4
+    WHERE d.status NOT IN ('CANCELLED', 'DRAFTED')
+    GROUP BY 1, 2
+) a7
+    ON m.merchant_id = a7.merchant_id AND m.shopped_date = a7.shopped_date
+LEFT JOIN (
+    SELECT DISTINCT 
+        d.merchant_id,
+        m2.shopped_date,
+        COUNT(DISTINCT d.borrower_id) AS scam_disputes
+    FROM raw.mariadb_fivetran_servicing_service_master.disputes d
+    INNER JOIN Other_v4_dependent m2
+        ON d.merchant_id = m2.merchant_id
+        AND DATE(d.created_at) BETWEEN m2.shopped_date - 55 AND m2.shopped_date + 5
+    WHERE d.status NOT IN ('CANCELLED', 'DRAFTED')
+        AND (d.partial_services_reason_text ILIKE '%fraud%' 
+             OR d.partial_services_reason_text ILIKE '%scam%' 
+             OR d.partial_services_reason_text ILIKE '%mal%practice%' 
+             OR d.partial_services_reason IN ('FRAUD'))
+    GROUP BY 1, 2
+) scam
+    ON m.merchant_id = scam.merchant_id AND m.shopped_date = scam.shopped_date
+GROUP BY 1
+;
+
+create or replace temp table Other_model_apply_with_patient as
+WITH apply_with_patient_data AS (
+    SELECT
+        m.merchant_id,
+        AVG(CASE WHEN l.status = 'FUNDED' THEN l.gross_amount END) AS avg_loan_size_apply_with_patient,
+        COUNT(DISTINCT a.id) AS count_apps_apply_with_patient
+    FROM
+        Other_v4_dependent m
+    LEFT JOIN
+        risk.risk_tables.risk_application a
+        ON m.merchant_id = a.merchant_id
+        AND DATE(a.created_at) BETWEEN m.shopped_date - 300 AND m.shopped_date + 85
+    LEFT JOIN
+        PREP.REVENUE_ANALYTICS_STAGING.APPLICATION_ATTRIBUTION p
+        ON p.application_id = a.id
+    LEFT JOIN
+        risk.risk_tables.risk_loan l
+        ON a.id = l.application_id
+    WHERE
+        a.industry_cat_risk = 'Other'
+        AND p.source_subcategory = 'apply with patient'
+        AND a.risk_bucket != 0
+    GROUP BY
+        m.merchant_id
+),
+not_apply_with_patient_data AS (
+    SELECT
+        m.merchant_id,
+        AVG(CASE WHEN l.status = 'FUNDED' THEN l.gross_amount END) AS avg_loan_size_not_apply_with_patient,
+        COUNT(DISTINCT a.id) AS count_apps_not_apply_with_patient
+    FROM
+        Other_v4_dependent m
+    LEFT JOIN
+        risk.risk_tables.risk_application a
+        ON m.merchant_id = a.merchant_id
+        AND DATE(a.created_at) BETWEEN m.shopped_date - 300 AND m.shopped_date + 85
+    LEFT JOIN
+        PREP.REVENUE_ANALYTICS_STAGING.APPLICATION_ATTRIBUTION p
+        ON p.application_id = a.id
+    LEFT JOIN
+        risk.risk_tables.risk_loan l
+        ON a.id = l.application_id
+    WHERE
+        a.industry_cat_risk = 'Other'
+        AND p.source_subcategory != 'apply with patient'
+        AND a.risk_bucket != 0
+    GROUP BY
+        m.merchant_id
+),
+combined_data AS (
+    SELECT
+        COALESCE(ap.merchant_id, np.merchant_id) AS merchant_id,
+        ap.avg_loan_size_apply_with_patient,
+        np.avg_loan_size_not_apply_with_patient,
+        ap.count_apps_apply_with_patient,
+        np.count_apps_not_apply_with_patient,
+        COALESCE(
+            ap.count_apps_apply_with_patient::FLOAT /
+            NULLIF(ap.count_apps_apply_with_patient + np.count_apps_not_apply_with_patient, 0),
+            0
+        ) AS percent_apps_apply_with_patient
+    FROM
+        apply_with_patient_data ap
+    FULL JOIN
+        not_apply_with_patient_data np
+        ON ap.merchant_id = np.merchant_id
+)
+SELECT DISTINCT
+    cd.merchant_id,
+    cd.count_apps_apply_with_patient AS awp_applications_90d_around_shop,
+    cd.percent_apps_apply_with_patient AS percent_awp_applications_90d_around_shop,
+    cd.avg_loan_size_apply_with_patient,
+    cd.avg_loan_size_not_apply_with_patient,
+    cd.avg_loan_size_apply_with_patient / NULLIF(cd.avg_loan_size_not_apply_with_patient, 0) AS apply_with_patient_multiplier
+FROM
+    combined_data cd
+;
+
+create or replace TEMP table Other_v4_low_health_historical as select * from RAW.MARIADB_FIVETRAN_ORGANIZATION_SERVICE_MASTER.ORGANIZATION_AUD where
+menu_code = 'Promo_24_LowHealth' ;
+
+CREATE OR REPLACE TEMP TABLE risk.practice_intelligence.v4_Other_base_5_large_ticket_driver AS 
+WITH cherry_practices AS (
+    SELECT DISTINCT m.merchant_id
+    FROM prep.core_staging.stg_merchants m
+    LEFT JOIN (
+        SELECT *
+        FROM risk.practice_intelligence.competitive_practices
+        WHERE first_look_option_c = 'Proceed'
+           OR second_look_option_c = 'Proceed'
+           OR third_look_option_c = 'Proceed'
+           OR web_first_look = 'Proceed'
+           OR web_second_look = 'Proceed'
+           OR web_third_look = 'Proceed'
+    ) p ON m.merchant_id = p.merchant_id
+    WHERE m.merchant_type = 'Cherry'
+      AND m.is_active
+      AND NOT m.is_terminated
+      AND p.merchant_id IS NOT NULL
+),
+keyword_practices AS (
+    SELECT DISTINCT m.merchant_id
+    FROM prep.core_staging.stg_merchants m
+    WHERE LOWER(m.merchant_name) LIKE '%cosmetic%'
+       OR LOWER(m.merchant_name) LIKE '%aesthetic%'
+       OR LOWER(m.merchant_name) LIKE '%design%'
+       OR LOWER(m.merchant_name) LIKE '%studio%'
+       OR LOWER(m.merchant_name) LIKE '%spa%'
+       OR LOWER(m.merchant_name) LIKE '%implant%'
+)
+SELECT
+    s.primary_merchant_id,
+    s.is_practice_active,
+    s.account_industry_segment,
+    s.is_terminated,
+    s.latest_health_assessment,
+    s.practice_last_30_gross_amount,
+    s.most_recent_health_assessment
+FROM (
+    SELECT
+        primary_merchant_id,
+        is_practice_active,
+        account_industry_segment,
+        is_terminated,
+        latest_health_assessment,
+        practice_last_30_gross_amount,
+        CASE
+            WHEN latest_health_assessment IS NULL THEN 'No Assessment'
+            ELSE latest_health_assessment
+        END AS most_recent_health_assessment
+    FROM prod.core_marts.practice_info_xf
+    WHERE (is_practice_active = TRUE OR is_terminated = TRUE)
+      AND account_industry_segment = 'Other'
+) AS s
+INNER JOIN (
+    SELECT merchant_id FROM cherry_practices
+    UNION
+    SELECT merchant_id FROM keyword_practices
+) p
+    ON s.primary_merchant_id = p.merchant_id;
+
+SELECT COUNT(DISTINCT id) 
+FROM Other_v4_low_health_historical;
+
+
+CREATE OR REPLACE TEMP TABLE risk.practice_intelligence.v4_Other_marketing_source AS 
+SELECT 
+    m.merchant_id,
+    SUM(CASE WHEN referral_medium IN ('qr_code_flyer', 'qr_code_digital', 'qrcode', 'qr_code_sticker') THEN 1 ELSE 0 END) AS marketing_apps,
+    SUM(CASE WHEN referral_source IN ('merchant_text') THEN 1 ELSE 0 END) AS sms_link_sent_apps,
+    SUM(CASE WHEN referral_source IN ('finder', 'finder-revamp') THEN 1 ELSE 0 END) AS cherry_finder_apps,
+    SUM(CASE WHEN referral_medium IN ('qr_code_estimate', 'text_estimate', 'email_estimate') THEN 1 ELSE 0 END) AS payment_estimator_apps,
+    SUM(CASE WHEN referral_medium IN ('preapproval') THEN 1 ELSE 0 END) AS pre_approval_apps,
+    SUM(CASE WHEN referral_medium IN ('website') THEN 1 ELSE 0 END) AS provider_website_apps,
+    SUM(CASE WHEN referral_medium IN ('apply_with_patient') THEN 1 ELSE 0 END) AS apply_with_client_apps,
+    SUM(CASE WHEN referral_source = 'practice' OR referral_medium IN ('textmessage', 'email') THEN 1 ELSE 0 END) AS application_link_apps,
+    SUM(CASE WHEN referral_source IS NULL AND referral_medium IS NULL THEN 1 ELSE 0 END) AS no_utm_direct_link_apps,
+    SUM(CASE WHEN 
+        referral_medium NOT IN ('qr_code_flyer', 'qr_code_digital', 'qrcode', 'qr_code_sticker', 'qr_code_estimate', 'text_estimate', 'email_estimate', 'preapproval', 'website', 'apply_with_patient', 'textmessage', 'email')
+        AND referral_source NOT IN ('merchant_text', 'finder', 'finder-revamp', 'practice')
+        AND NOT (referral_source IS NULL AND referral_medium IS NULL)
+        THEN 1 ELSE 0 END) AS other_apps,
+    COUNT(a.id) AS total_apps,
+    
+    -- Percentages
+    marketing_apps::FLOAT / NULLIF(total_apps, 0) AS pct_marketing,
+    sms_link_sent_apps::FLOAT / NULLIF(total_apps, 0) AS pct_sms_link_sent,
+    cherry_finder_apps::FLOAT / NULLIF(total_apps, 0) AS pct_cherry_finder,
+    payment_estimator_apps::FLOAT / NULLIF(total_apps, 0) AS pct_payment_estimator,
+    pre_approval_apps::FLOAT / NULLIF(total_apps, 0) AS pct_pre_approval,
+    provider_website_apps::FLOAT / NULLIF(total_apps, 0) AS pct_provider_website,
+    apply_with_client_apps::FLOAT / NULLIF(total_apps, 0) AS pct_apply_with_client,
+    application_link_apps::FLOAT / NULLIF(total_apps, 0) AS pct_application_link,
+    no_utm_direct_link_apps::FLOAT / NULLIF(total_apps, 0) AS pct_no_utm_direct_link,
+    other_apps::FLOAT / NULLIF(total_apps, 0) AS pct_other
+FROM 
+    Other_v4_dependent m
+LEFT JOIN 
+    raw.mariadb_fivetran_application_service_master.application a
+    ON m.merchant_id = a.merchant_id
+    AND DATE(a.created_at) BETWEEN m.shopped_date - 85 AND m.shopped_date + 5
+LEFT JOIN 
+    raw.mariadb_fivetran_organization_service_master.organization b
+    ON a.organization_id = b.id 
+   -- AND LOWER(b.industry) ILIKE '%dent%'
+WHERE 
+    a.demo = 0
+GROUP BY 
+    m.merchant_id
+;
+
+
+
+
+CREATE OR REPLACE TABLE risk.practice_intelligence.v4_Other_base_6 AS
+WITH ranked_merchants AS (
+    SELECT 
+        co.scrape_competitor_count,
+        COMPETITORS_LIST,
+        co.active_competitor_count,
+        case when a.actual_look is null then 3 else a.actual_look end as shop_position,
+        least(dis.disputes_60d_around_shop / nullifzero(t.loans_distinct), 1) as dispute_rate_last60d,
+      --  a.industry,
+   case when cherry_share_60d_new is null then cherry_share_pp_v4 else cherry_share_60d_new end as 
+        cherry_share_flag,
+        a.*, 
+     
+
+
+
+
+
+CASE 
+    WHEN app.applications = 0 AND t.TRANSACTIONS_60D = 0 
+        THEN 'Inactive- No Applications'
+         
+    WHEN loans_90d = 0 AND t.TRANSACTIONS_60D = 0 
+        THEN 'Churning - No Loans'
+
+    WHEN nf.MAX_HISTORICAL_BIMONTHLY_APPS > 5
+        AND (nf.apps_vs_historical < 0.1 OR nf.apps_vs_historical IS NULL)
+        THEN 'Churning_to_at-risk_inactive'
+
+     WHEN 
+  a.actual_look = 1 AND scrape_competitor_count = 0  
+ -- or (a.actual_look != 1 and web_leader = 1)
+THEN '00Cherry_first_look_no_Comp'
+
+           
+    WHEN a.actual_look = 1 
+        AND a.strength_of_first_look_c ILIKE '%un%' 
+        AND a.second_look_option_c = 'None'
+        and (web_leader is not null or cherry_share_flag > .5)
+        THEN '0Cherry_first_look_Winning' 
+             
+  WHEN 
+  (a.actual_look = 2 AND (w.web_monopoly = 1))
+
+ -- or (a.actual_look != 1 and web_leader = 1)
+THEN '0Cherry_first_look_Winning'
+
+
+     WHEN 
+  (a.actual_look = 2 AND (w.web_monopoly = 1 OR w.web_leader = 1))
+  OR (a.actual_look = 2 AND cherry_share_flag > .5)
+ -- or (a.actual_look != 1 and web_leader = 1)
+THEN '2first_look_weak'
+
+ WHEN 
+  (a.actual_look = 2 AND a.strength_of_first_look_c ilike '%weak%')
+ -- or (a.actual_look != 1 and web_leader = 1)
+THEN '2first_look_weak'
+
+    WHEN a.actual_look = 1 
+        THEN '2first_look_weak'
+when a.first_look_option_c = 'None'  then '4_null'
+    ELSE '3second look'
+END AS cherry_look,
+
+
+
+
+
+
+
+-------------- Split Loo
+        
+        CASE 
+            WHEN cherry_look = '0Cherry_first_look_Winning' THEN 0 
+           -- WHEN cherry_look = '1first_look' THEN 1
+            WHEN cherry_look = '2first_look_weak' THEN 1
+            WHEN cherry_look = '3second look' THEN 2
+            WHEN cherry_look = 'Churning_to_at-risk_inactive' THEN 3
+            WHEN cherry_look = 'Inactive' THEN 4
+            ELSE 99 
+        END AS persona_numeric,
+        app.applications,  
+        w.web_review_score as web_review_score2,
+        co.non_cherry_carecredit AS NON_CC_COMPETITOR_COUNT,
+        rd.risk_difference,
+        nf.apps_vs_historical,
+        -- nf.INCREASE_IN_SP,
+        p3.cherry_share_pp_v4s AS cherry_share_pp,
+        p2.cherry_share_pp_v2s AS cherry_share_pp2,
+        n.cherry_share_60d_new AS cherry_share_60d,
+        ar.above_median_rate_60d,
+        CASE 
+            WHEN w.first_look_option_c = 'PatientFi' 
+                 OR a.first_look_option_c = 'PatientFi' 
+            THEN 1 
+            ELSE 0 
+        END AS PF_IND,
+       -- a.emergency_flag,
+        c.application_win_rate_30 AS application_win_rate, 
+        t.LOANS_DISTINCT
+        ,t.PCT_LOANS_ZERO_APR,
+        t.pct_loans_zero_apr_Short_Term
+         ,t2.PCT_LOANS_ZERO_APR as PCT_LOANS_ZERO_APR_365,
+        t2.pct_loans_zero_apr_Short_Term as pct_loans_zero_apr_Short_Term_365,
+        w.web_review_score2 as web_review_score, 
+        web_options,
+        w.web_review_score3, 
+        w.web_presence,
+        w.web_position,
+        w.web_monopoly,
+        w.web_widget,
+        w.first_look_option_c as web_first_look,
+        w.web_options_less_than_3,
+        w.social_monopoly,
+        b2.median_risk_score,
+        b2.MEDIAN_VANTAGE_SCORE_60D,
+        t.pct_loans_long_term,
+        b2.vantage_score_percentile,
+        (b2.vantage_score_percentile- model_score_percentile) as risk_score_percent_difference,
+        n.monthly_carecredit_volume,
+        p3.cherry_share_pp_v4_RAW,
+         CASE 
+            WHEN mn.MENU_CODE ILIKE '%50k%' THEN '50k' 
+            WHEN mn.MENU_CODE ILIKE '%first%' THEN 'First_look' 
+            WHEN mn.MENU_CODE ILIKE '%low%' THEN 'low_health' 
+            ELSE NULL 
+        END AS MENU_CODE_today,
+        ats.menu_code as menu_code_shop,
+        t.transactions_60d, 
+        m.median_model_score,
+        m.model_score_percentile,
+        az.APPLICANT_VANTAGE_PERCENTILE, 
+        soc.percent_estimate,
+        soc.percent_actions,
+        t.loan_term,
+        r.loans, 
+        w.web_leader,
+        r.risk_scalar, 
+        xf.ALLE_PRACTICE_TYPE,
+        ls.loanstack_applications,
+        ls.loanstack_pct,
+      --   a.trust_score_c,
+        awp.percent_awp_applications_90d_around_shop,
+         awp.apply_with_patient_multiplier,
+         ma.pct_marketing,
+ma.pct_sms_link_sent,
+ma.pct_cherry_finder,
+ma.pct_payment_estimator,
+ma.pct_pre_approval,
+ma.pct_provider_website,
+ma.pct_apply_with_client,
+ma.pct_application_link,
+ma.pct_no_utm_direct_link,
+ma.pct_other,
+da.dispute_rate,
+mt.pct_loans_at_max_term,
+case when ms.sales_process_first_solution_c is not null then 1 else 0 end as non_financing_flag,
+case when ms.misinformation_about_cherry_c is not null then 1 else 0 end as misinformation_flag,
+case when ms.first_look_option_c = 'None' then 1 else 0 end as non_shop,
+--case when percent_estimator > 10 then 1 else 0 end as non_shop,
+
+
+        ROW_NUMBER() OVER (PARTITION BY a.merchant_id ORDER BY a.go_live_date DESC) AS rn
+    FROM 
+        Other_v4_dependent a
+    LEFT JOIN 
+        Other_v4_applications_60d app ON a.merchant_id = app.merchant_id
+    LEFT JOIN 
+        Other_v4_median_vantage_60d b2 ON a.merchant_id = b2.merchant_id
+    LEFT JOIN 
+        Other_v4_application_win_30 c ON a.merchant_id = c.merchant_id
+    LEFT JOIN 
+        Other_v4_web_review_score w ON a.merchant_id = w.merchant_id
+    LEFT JOIN 
+        Other_v4_transactions_60 t ON a.merchant_id = t.merchant_id
+    LEFT JOIN 
+        Other_v4_transactions_365 t2 ON a.merchant_id = t2.merchant_id
+    LEFT JOIN 
+        Other_v4_cherry_share_60d_new n ON a.merchant_id = n.merchant_id
+    LEFT JOIN 
+        Other_v4_model_score m ON a.merchant_id = m.merchant_id
+    LEFT JOIN 
+        Other_v4_practice_potential_60d_3 p3 ON a.merchant_id = p3.merchant_id
+    LEFT JOIN 
+        Other_v4_practice_potential_60d_2 p2 ON a.merchant_id = p2.merchant_id
+    LEFT JOIN 
+        risk.practice_intelligence.mystery_shopping_valids ms ON a.merchant_id = ms.merchant_id 
+    LEFT JOIN 
+        Other_v4_active_rate soc ON a.merchant_id = soc.merchant_id
+    LEFT JOIN 
+        prep.revenue_migration.enhanced_practice_potential pp ON a.merchant_id = pp.merchant_id
+    LEFT JOIN 
+        Other_v4_application_zip az ON a.merchant_id = az.merchant_id
+    LEFT JOIN 
+        risk.practice_risk.organization_risk_coefficients r ON a.organization_id = r.organization_id
+        left join Other_model_disputes dis on dis.organization_id = a.organization_id
+    LEFT JOIN 
+        prod.core_marts.practice_info_xf xf ON a.merchant_id = xf.primary_merchant_id
+    LEFT JOIN 
+        Other_v4_prime_vantage_change vc ON vc.merchant_id = a.merchant_id
+    LEFT JOIN 
+        risk.practice_intelligence.competitor_matches_daily co ON co.primary_merchant_id = a.merchant_id
+    LEFT JOIN 
+        apps_vs_historical_feature nf ON nf.merchant_id = a.merchant_id
+    LEFT JOIN 
+        risk.practice_intelligence.v4_Other_marketing_source  ma ON a.merchant_id = ma.merchant_id
+    LEFT JOIN 
+        Other_v4_above_median_60d ar ON ar.merchant_id = a.merchant_id
+    LEFT JOIN 
+        prep.core_staging.stg_merchants b3 ON b3.merchant_id = a.merchant_id
+    LEFT JOIN 
+        Other_v4_vantage_vs_risk_score rd ON rd.merchant_id = a.merchant_id
+    left join Other_model_apply_with_patient awp on awp.merchant_id = a.merchant_id
+    LEFT JOIN Other_v4_loan_stacking_flag ls  on ls.merchant_id = a.merchant_id
+    LEFT JOIN Other_v4_loans lo on lo.merchant_id = a.merchant_id
+      left join Other_v4_pct_max_term mt on mt.merchant_id = a.merchant_id
+     left join merchant_level_health_dispute_rate_all_time da on da.merchant_id = a.merchant_id
+
+    left join RAW.MARIADB_FIVETRAN_ORGANIZATION_SERVICE_MASTER.ORGANIZATION mn on a.organization_id = mn.id
+    left join Other_v4_dependent_menu_organization_at_shop ats on ats.id = a.organization_id
+    WHERE 
+        a.go_live_date > '2021-01-01'
+        AND b3.go_live_date < CURRENT_DATE() - 90
+   --   and ats.MENU_CODE != 'low_health'
+   and a.first_look_option_c != 'None'
+        AND a.organization_id   IN (SELECT DISTINCT organization_id FROM single_practice_organizations)
+     --  AND a.organization_id not  IN (SELECT DISTINCT id FROM Other_v4_low_health_historical)
+)
+SELECT * 
+FROM ranked_merchants
+WHERE rn = 1;
+
+
+
+select r.fpd_balance_scalar, a.risk_scalar, a.loans, r.loans, * from risk.practice_intelligence.v4_Other_base_6 a
+ LEFT JOIN risk.practice_risk.organization_fpd_coefficients r 
+  ON r.organization_id = a.organization_id
+ left join risk.practice_risk.practice_valuations v on v.organization_id = a.organization_id
+where   confidence > .8 and web_leader is null and a.loans > 30 order by r.fpd_balance_scalar desc;
+
+
+
+
+
+CREATE OR REPLACE TABLE risk.practice_intelligence.v4_Other_base_full_with_inactive AS 
+SELECT *,
+FROM risk.practice_intelligence.v4_Other_base_6;
+
+
+-- Step 1: Create the full base table
+CREATE OR REPLACE TABLE risk.practice_intelligence.v4_Other_base_full AS 
+SELECT *,
+FROM risk.practice_intelligence.v4_Other_base_6
+WHERE cherry_look NOT IN ('Inactive- No Loans', 'Inactive- No Applications', 'Churning_to_at-risk_inactive','00Cherry_first_look_no_Comp')
+AND persona_numeric != 99;
+
+-- Step 2: Create train-test sample (85% of full table)
+CREATE OR REPLACE TABLE risk.practice_intelligence.v4_Other_base_train_test AS 
+SELECT *
+FROM risk.practice_intelligence.v4_Other_base_full
+WHERE MOD(ABS(HASH(merchant_id)), 100) < 85;
+
+
+
+
+-- Step 3: Create holdout table (remaining 15%)
+CREATE OR REPLACE TABLE risk.practice_intelligence.v4_Other_base_holdout AS
+SELECT *
+FROM risk.practice_intelligence.v4_Other_base_full
+WHERE MOD(ABS(HASH(merchant_id)), 100) >= 85;
+
+ select * from risk.practice_intelligence.v4_Other_base_holdout ;
+
+select * from  risk.practice_intelligence.mystery_shopping_all;
+
+select sales_process_first_solution_c, count(merchant_id) from risk.practice_intelligence.mystery_shopping_valids group by 1 
+order by 1;
+
+  --  create or replace table risk.practice_intelligence.competitor_matches_daily as
+
+
+SELECT 
+  cherry_db_industry,
+  COUNT(a.merchant_id) AS merchant_count,
+  median(shop_position) AS avg_shop_position,
+  AVG(scrape_competitor_count) AS avg_competitor_count,
+  
+  -- Percent with First Look Winning
+  100.0 * SUM(CASE WHEN cherry_look = '0Cherry_first_look_Winning' THEN 1 ELSE 0 END) / NULLIF(COUNT(a.merchant_id), 0) AS pct_first_look_winning,
+  
+  CASE  
+    WHEN SUM(r.loans) = 0 OR SUM(r.loans) IS NULL THEN NULL 
+    ELSE SUM(r.FPD_BALANCE_SCALAR * r.loans) / SUM(r.loans) 
+  END AS weighted_fpd_balance_scalar,
+  
+  CASE 
+    WHEN SUM(TRANSACTION_VOLUME_HISTORICAL) = 0 OR SUM(TRANSACTION_VOLUME_HISTORICAL) IS NULL THEN NULL
+    ELSE SUM(
+      CASE 
+        WHEN (transaction_volume_active + transaction_volume_closed) = 0 
+          OR (transaction_volume_active + transaction_volume_closed) IS NULL THEN 0
+        ELSE ((loan_profit_active + loan_profit_closed) / NULLIF((transaction_volume_active + transaction_volume_closed), 0)) * TRANSACTION_VOLUME_HISTORICAL
+      END
+    ) / NULLIF(SUM(TRANSACTION_VOLUME_HISTORICAL), 0)
+  END AS weighted_profit_rate
+
+FROM risk.practice_intelligence.v4_Other_base_full a
+LEFT JOIN risk.practice_risk.organization_fpd_coefficients r 
+  ON r.organization_id = a.organization_id
+LEFT JOIN risk.practice_risk.practice_valuations v 
+  ON v.organization_id = a.organization_id
+ left join risk.practice_risk.warnings w on w.organization_id = a.organization_id
+ left join Other_v4_same_income si on si.merchant_id = a.merchant_id
+ left join merchant_level_health_dispute_rate_all_time d  on a.merchant_id = d.merchant_id
+WHERE confidence > .6 and cherry_look != '0Cherry_first_look_Winning'
+AND NOT (
+    COALESCE(w.cause, '') = 'Aggressive Selling and Products' 
+    OR COALESCE(d.dispute_rate, 0) > .05 
+    OR (
+      a.organization_id IN (SELECT organization_id FROM risk.practice_risk.warnings) 
+      AND COALESCE(dispute_rate_last60d, 0) > .01
+    )
+  )
+GROUP BY 1 
+ORDER BY 2 DESC;
+
+---testing
+SELECT
+--cherry_look_final_2,
+--web_review_score,
+--web_first_look,
+--emergency_flag,
+cherry_look,
+-- CASE 
+--when w.cause = 'Aggressive Selling and Products' then 'high risk' 
+-- when d.dispute_rate > .05 then 'high risk'
+-- when  a.organization_id  IN (SELECT organization_id FROM risk.practice_risk.warnings) and dispute_rate_last60d > .01 then '1_high_risk'
+-- when dispute_rate_last60d > .075  or si.pct_same_income > 50 or (si.pct_same_housing > 75 and total_loans > 10) or (a.applications > 20 and application_win_rate < .05) or (mt.pct_loans_at_max_term >= 66 and total_loans > 10) or (model_score_percentile < 7.5 and percent_actions = 0 and a.applications > 10) then '2_high_risk'   ELSE '0low_risk' END AS risk_flag,
+--CHERRY_DB_INDUSTRY,
+--cherry_look_final_2,
+--case when dispute_rate_last60d > .05 then 'high_disputes' when dispute_rate_last60d > .02 then 'low_disputes' else 'no disputes' end as dispute_flag,
+--sub_industry,
+--actual_look,
+
+--first_look_option_c,
+--web_position,
+--loans_distinct,
+--web_position,
+--cherry_look2,
+--number_of_web_options,
+--case 
+--   when loanstack_applications = 0 then '0'
+--   when loanstack_applications = 1 then '1'
+--    when loanstack_applications = 2 then '2'
+ --   when loanstack_applications > 5 then '5+'
+ --  when loanstack_applications > 2 then '3-5'
+ --  else null 
+--end as loan_stack,
+--case 
+--  when application_win_rate < .05 or median_model_score > .12 and applications > 25 then '0'
+--   when application_win_rate < .075  or median_model_score > .1 and applications > 10  then '1'
+-- when application_win_rate < .15 or median_model_score > .08 and applications > 10  then '2'
+ --   else null 
+  --  end as loan_stack,
+
+-- non_financing_flag,
+-- misinformation_flag,
+--   when application_win_rate < .075  or median_model_score > .1 and applications > 10  then '1'
+-- when application_win_rate < .15 or median_model_score > .08 and applications > 10  then '2'
+ --   else null 
+  --  end as loan_stack,
+--case when merchant_id > 0 then 1 else 0 end as health_ind,
+--MENU_CODE,  
+        --  avg(percent_estimate),
+--case 
+--  when median_model_score > .13  and applications > 10 then 'no actions'
+ --   when percent_actions < 10 then 'low actions'
+--when percent_actions < .2 and applications > 10  then 'low actions'    else null 
+ --   end as loan_stack,
+  COUNT(DISTINCT a.merchant_id) AS count_merchant_id,
+    SUM(TRANSACTIONS_60D) AS sum_transactions_60d,
+     COUNT(DISTINCT a.merchant_id) * 100.0 / SUM(COUNT(DISTINCT a.merchant_id)) OVER() AS pct_merchant_id,
+  SUM(TRANSACTIONS_60D) * 100.0 / SUM(SUM(TRANSACTIONS_60D)) OVER() AS pct_transactions_60d,
+      CASE  
+    WHEN SUM(r.loans) = 0 OR SUM(r.loans) IS NULL THEN NULL 
+    ELSE SUM(r.FPD_LOAN_SCALAR * r.loans) / SUM(r.loans) 
+  END AS weighted_fpd_loan_scalar,
+  CASE  
+    WHEN SUM(r.loans) = 0 OR SUM(r.loans) IS NULL THEN NULL 
+    ELSE SUM(r.FPD_BALANCE_SCALAR * r.loans) / SUM(r.loans) 
+  END AS weighted_fpd_balance_scalar,
+     CASE 
+    WHEN SUM(TRANSACTION_VOLUME_HISTORICAL) = 0 OR SUM(TRANSACTION_VOLUME_HISTORICAL) IS NULL THEN NULL
+    ELSE SUM(
+      CASE 
+        WHEN (transaction_volume_active + transaction_volume_closed) = 0 
+          OR (transaction_volume_active + transaction_volume_closed) IS NULL THEN 0
+        ELSE ((loan_profit_active + loan_profit_closed) / NULLIF((transaction_volume_active + transaction_volume_closed), 0)) * TRANSACTION_VOLUME_HISTORICAL
+      END
+    ) / NULLIF(SUM(TRANSACTION_VOLUME_HISTORICAL), 0)
+  END AS weighted_profit_rate,
+  sum(r.loans),
+  avg(shop_position),
+
+  avg(transactions_60d),
+  avg(loans_distinct),
+  avg(loan_term),
+ AVG(web_review_score) AS avg_web_review_score,
+ avg(web_review_score2) as avg_web_review_score2,
+  AVG(cherry_share_60d) AS avg_cherry_share_60d,
+ median(percent_actions),
+ median(percent_estimate),
+ avg(percent_actions),
+ avg(percent_estimate),
+
+  avg(scrape_competitor_count),
+avg(cherry_share_pp) AS avg_cherry_share_pp4,
+  avg(model_score_percentile),
+  avg(vantage_score_percentile),
+  avg(risk_score_percent_difference),
+  avg(MEDIAN_VANTAGE_SCORE_60D),
+AVG(median_model_score) AS avg_median_model_score,
+  median(application_win_rate) AS avg_application_win_rate,
+  AVG(a.applications) AS avg_applications,
+  avg(NON_CC_COMPETITOR_COUNT) as NON_CC_COMPETITOR_COUNT,
+  avg(active_competitor_count),
+--avg(cherry_share_pp2) AS avg_cherry_share_pp2,
+avg(cherry_share_pp_v4_RAW) AS avg_cherry_share_pp3_raw,
+  avg(transactions_60d),
+  avg(apps_vs_historical),
+  avg(above_median_rate_60d),
+  avg(APPLICANT_VANTAGE_PERCENTILE),
+  avg(risk_difference),
+avg(pct_marketing),
+avg(pct_sms_link_sent),
+avg(pct_cherry_finder),
+avg(pct_payment_estimator),
+avg(pct_pre_approval),
+avg(pct_provider_website),
+avg(pct_apply_with_client),
+avg(pct_application_link),
+avg(pct_no_utm_direct_link),
+avg(pct_other)
+FROM risk.practice_intelligence.v4_Other_base_6 a
+LEFT JOIN risk.practice_risk.organization_fpd_coefficients r 
+  ON r.organization_id = a.organization_id
+ left join risk.practice_risk.practice_valuations v on v.organization_id = a.organization_id
+ left join Other_v4_loan_stacking_flag ls on ls.merchant_id = a.merchant_id
+  left join Other_v4_pct_max_term mt on mt.merchant_id = a.merchant_id
+  left join risk.practice_risk.warnings w on w.organization_id = a.organization_id
+ left join Other_v4_same_income si on si.merchant_id = a.merchant_id
+ left join merchant_level_health_dispute_rate_all_time d  on a.merchant_id = d.merchant_id
+--where  confidence > .8 and web_leader is null --and cherry_db_industry in ('Day Spa','Salon','Dermatology')
+--and cherry_db_industry = 'Permanent Makeup'
+--and first_look_option_c != 'Cherry' and web_leader = 1 and web_monopoly = 1
+--and cherry_db_industry = 'Dermatology'
+--and cherry_db_industry = 'Primary Care'
+--and cherry_db_industry in ( 'Medical Weight Loss',Cryotherapy
+--and cherry_db_industry = 'Cryotherapy'
+--where cherry_db_industry = 'Optometry'
+--and web_leader is null -- and merchant_id != 26762and first_look_option_c = 'None'
+--where a.mystery_shopping_assessment = 'Unknown' and che
+--where 
+GROUP BY 1
+--order by 1;
+ORDER BY  
+   1
+    ;
+
+    select strength_of_first_look_c, count(merchant_id) from risk.practice_intelligence.mystery_shopping_valids group by 1 order by 1;
+
+
+select * from risk.practice_intelligence.v4_Other_base_6 where cherry_look = '3second look' order by transactions_60d desc;
+
+
+select LOANSWHEREMAXELIGIBLEEQUALSAPPLICATIONPURCHASEAMT_COUNT180DAYS, count(merchant_id) from risk.risk_tables.es_q2_fpd_model_v2_practice_features
+group by 1
+order by 2 desc;
+
+
+SELECT 
+	date(w.created_at) as "Warning Date",
+	w.warning AS "Warning Type", 
+	w.cause AS "Cause", 
+	w.outcome AS "Cause (Extended)"
+from risk.practice_risk.warnings AS w
+INNER JOIN prep.core_staging.stg_merchants AS merch ON w.organization_id = merch.primary_organization_id
+WHERE merch.merchant_id = {{merchant_id}}
+order by w.created_at desc
+;
+select * from risk.practice_risk.warnings;
+
+select * from raw.mariadb_fivetran_servicing_service_master.disputes;
+
+CREATE OR REPLACE TEMP TABLE merchant_level_health_dispute_rate_all_time AS
+
+SELECT 
+    m.merchant_id,
+    COUNT(DISTINCT l.loan_id) AS loans,
+    COUNT(DISTINCT d.loan_id) AS disputed_loans,
+    COUNT(DISTINCT d.loan_id) * 1.0 / NULLIF(COUNT(DISTINCT l.loan_id), 0) AS dispute_rate
+FROM prep.core_staging.stg_merchants m
+LEFT JOIN prod.core_marts.loan_info_xf l 
+    ON l.merchant_id = m.merchant_id
+    AND l.loan_status IN ('FUNDED', 'AWAITING_FUNDING')
+LEFT JOIN raw.mariadb_fivetran_servicing_service_master.disputes d 
+
+    ON d.loan_id = l.loan_id
+
+GROUP BY 1;
+
+
+
+select * from raw.mariadb_fivetran_servicing_service_master.disputes  limit 10;
+
+SELECT
+    CASE 
+when w.cause = 'Aggressive Selling and Products' then '0high risk' 
+ when (d.dispute_rate > .15)or (dispute_rate_last60d > .15) then '1high risk'
+ when (a.applications > 20 and application_win_rate < .05) then '6_high_risk'
+ when  (model_score_percentile < 7.5 and percent_actions = 0 and a.applications > 20) then '7_high_risk'
+  when  (d.dispute_rate > .03)or (dispute_rate_last60d > .03)  then '8_medium_risk'
+
+--WHEN a.organization_id not IN (SELECT organization_id FROM risk.practice_risk.warnings)THEN 'low risk' 
+        ELSE '0low_risk'
+    END AS risk_flag,
+--case 
+--  when mt.pct_loans_at_max_term >= 50  and avg_max_term > 40 and total_loans > 10 then 'High-Risk'
+--  when (mt.pct_loans_at_max_term >= 40 and avg_max_term > 40) then 'High-Risk'
+--  when (mt.pct_loans_at_max_term >= 40 and avg_max_term > 35) and total_loans > 10 then 'Mid-Risk'
+-- else 'low-risk'
+ --   end as risk_flag,
+--menu_code_today,
+--case when ls.loanstack_pct > 25 then 'high risk' else 'no loan stacking' end as loanstaking_flag,
+--case when ls2.loanstack_pct2 > 20 and a.loans > 5 then 'high risk' when ls2.loanstack_pct2 between 15 and 20 and a.loans > 5 then 'mid risk' else 'no loan stacking' end as loanstaking_flag,
+
+--case when dispute_rate_last60d > .075  or si.pct_same_income > 50 or (si.pct_same_housing > 75 and total_loans > 10) or (a.applications > 20 and application_win_rate < .05) or (mt.pct_loans_at_max_term >= 66 and total_loans > 10) or (model_score_percentile < 7.5 and percent_actions = 0 and a.applications > 10) then '2_high_risk' when   dispute_rate_last60d > .05  or si.pct_same_income > 40 or (si.pct_same_housing > 50 and total_loans > 10) or (a.applications > 15 and application_win_rate < .075) or (mt.pct_loans_at_max_term >= 55 and total_loans > 7) or  (model_score_percentile < 12.5 and percent_actions = 0 and a.applications > 8)then '1_medium_risk' else '0_low_risk' end as risk_flag,
+
+--case when si.pct_same_income > 50 or (si.pct_same_housing > 75 and total_loans > 10)   then 'high risk' else 'low risk' end as risk_flag,
+--case when si.pct_same_housing > 75 then 'high risk' else 'low risk' end as risk_flag,
+--case when si.housing_equals_one > 10 then 'high risk' else 'low risk' end as risk_flag,
+
+
+--non_financing_flag,
+ --misinformation_flag,
+
+-- non_financing_flag,
+-- misinformation_flag,
+--   when application_win_rate < .075  or median_model_score > .1 and applications > 10  then '1'
+-- when application_win_rate < .15 or median_model_score > .08 and applications > 10  then '2'
+ --   else null 
+  --  end as loan_stack,
+  --case when (model_score_percentile < 7.5 and percent_actions = 0 and a.applications > 10) then 'high risk' else 'low_risk' end as risk_flag,
+
+  COUNT(DISTINCT a.merchant_id) AS count_merchant_id,
+    SUM(TRANSACTIONS_60D) AS sum_transactions_60d,
+     COUNT(DISTINCT a.merchant_id) * 100.0 / SUM(COUNT(DISTINCT a.merchant_id)) OVER() AS pct_merchant_id,
+  SUM(TRANSACTIONS_60D) * 100.0 / SUM(SUM(TRANSACTIONS_60D)) OVER() AS pct_transactions_60d,
+      CASE  
+    WHEN SUM(r.loans) = 0 OR SUM(r.loans) IS NULL THEN NULL 
+    ELSE SUM(r.FPD_LOAN_SCALAR * r.loans) / SUM(r.loans) 
+  END AS weighted_fpd_loan_scalar,
+  CASE  
+    WHEN SUM(r.loans) = 0 OR SUM(r.loans) IS NULL THEN NULL 
+    ELSE SUM(r.FPD_BALANCE_SCALAR * r.loans) / SUM(r.loans) 
+  END AS weighted_fpd_balance_scalar,
+    CASE 
+    WHEN SUM(a.loans) = 0 OR SUM(a.loans) IS NULL THEN NULL 
+    ELSE SUM(a.risk_scalar * a.loans) / SUM(a.loans) 
+  END AS weighted_avg_risk_scalar,
+   CASE 
+    WHEN SUM(TRANSACTION_VOLUME_HISTORICAL) = 0 OR SUM(TRANSACTION_VOLUME_HISTORICAL) IS NULL THEN NULL
+    ELSE SUM(
+      CASE 
+        WHEN (transaction_volume_active + transaction_volume_closed) = 0 
+          OR (transaction_volume_active + transaction_volume_closed) IS NULL THEN 0
+        ELSE ((loan_profit_active + loan_profit_closed) / NULLIF((transaction_volume_active + transaction_volume_closed), 0)) * TRANSACTION_VOLUME_HISTORICAL
+      END
+    ) / NULLIF(SUM(TRANSACTION_VOLUME_HISTORICAL), 0)
+  END AS weighted_profit_rate,
+
+  sum(r.loans),
+  avg(shop_position),
+  
+  avg(transactions_60d),
+  avg(loans_distinct),
+  avg(loan_term),
+  avg(PCT_LOANS_ZERO_APR),
+  avg(pct_loans_zero_apr_Short_Term),
+ AVG(web_review_score) AS avg_web_review_score,
+ avg(web_review_score2) as avg_web_review_score2,
+  AVG(cherry_share_60d) AS avg_cherry_share_60d,
+ median(percent_actions),
+ median(percent_estimate),
+ avg(percent_actions),
+ avg(percent_estimate),
+avg(ls.loanstack_applications),
+avg(ls.loanstack_pct),
+  avg(scrape_competitor_count),
+avg(cherry_share_pp) AS avg_cherry_share_pp4,
+  avg(model_score_percentile),
+  avg(vantage_score_percentile),
+  avg(risk_score_percent_difference),
+  avg(MEDIAN_VANTAGE_SCORE_60D),
+AVG(median_model_score) AS avg_median_model_score,
+  median(application_win_rate) AS avg_application_win_rate,
+  AVG(a.applications) AS avg_applications,
+  avg(NON_CC_COMPETITOR_COUNT) as NON_CC_COMPETITOR_COUNT,
+  avg(active_competitor_count),
+--avg(cherry_share_pp2) AS avg_cherry_share_pp2,
+avg(cherry_share_pp_v4_RAW) AS avg_cherry_share_pp3_raw,
+  avg(transactions_60d),
+FROM risk.practice_intelligence.v4_Other_base_6 a
+LEFT JOIN risk.practice_risk.organization_fpd_coefficients r 
+  ON r.organization_id = a.organization_id
+ left join risk.practice_risk.practice_valuations v on v.organization_id = a.organization_id
+ left join risk.practice_intelligence.mystery_shopping_valids ms on a.merchant_id = ms.merchant_id
+ left join Other_v4_loan_stacking_flag ls on ls.merchant_id = a.merchant_id
+  left join Other_v4_pct_max_term mt on mt.merchant_id = a.merchant_id
+  left join risk.practice_risk.warnings w on w.organization_id = a.organization_id
+ left join Other_v4_same_income si on si.merchant_id = a.merchant_id
+ left join merchant_level_health_dispute_rate_all_time d  on a.merchant_id = d.merchant_id
+--where  loan_term > 40
+where confidence > .8   
+--and 
+--and mt.pct_loans_at_max_term >= 50 and avg_max_term > 47 and total_loans > 10
+--and(a.applications > 20 and application_win_rate < .1) and scrape_competitor_count > 2
+--and menu_code_today != 'low_health' --and (ls2.loanstack_pct2 > 20 and a.loans > 5) or (ls2.loanstack_pct2 between 15 and 20 and a.loans > 5)
+
+--where total_applications < 10
+--and pct_same_income < 50
+GROUP BY 1
+--order by 1;
+ORDER BY  
+   1  -- For any unexpected values
+    ;
